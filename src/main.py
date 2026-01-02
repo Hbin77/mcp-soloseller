@@ -828,11 +828,14 @@ app = FastAPI(
 )
 
 # CORS 설정
+# 주의: 프로덕션 배포 시 CORS_ORIGINS 환경 변수를 설정하세요
+# 예: CORS_ORIGINS=https://your-domain.com,https://app.your-domain.com
 from fastapi.middleware.cors import CORSMiddleware
 
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 프로덕션에서는 특정 도메인만 허용
+    allow_origins=cors_origins if cors_origins != ["*"] else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
