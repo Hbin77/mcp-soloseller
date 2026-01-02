@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>설정 마법사 - 쇼핑몰 자동화 MCP</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+    <div x-data="wizard()" class="container mx-auto px-4 py-8 max-w-3xl">
+        <!-- 헤더 -->
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">🛒 쇼핑몰 자동화 MCP</h1>
+            <p class="text-gray-600">설정 마법사를 통해 손쉽게 연동을 완료하세요</p>
+        </div>
+
+        <!-- 진행 단계 -->
+        <div class="flex items-center justify-center mb-8">
+            <template x-for="(step, index) in steps" :key="index">
+                <div class="flex items-center">
+                    <div class="flex items-center justify-center w-10 h-10 rounded-full font-bold transition-all"
+                         :class="currentStep > index ? 'bg-green-500 text-white' : currentStep === index ? 'bg-blue-500 text-white' : 'bg-gray-300 text-gray-600'">
+                        <span x-show="currentStep <= index" x-text="index + 1"></span>
+                        <i x-show="currentStep > index" class="ri-check-line"></i>
+                    </div>
+                    <div x-show="index < steps.length - 1" class="w-16 h-1 mx-2"
+                         :class="currentStep > index ? 'bg-green-500' : 'bg-gray-300'"></div>
+                </div>
+            </template>
+        </div>
+
+        <!-- 카드 -->
+        <div class="bg-white rounded-2xl shadow-xl p-8">
+            <!-- Step 0: 시작 -->
+            <div x-show="currentStep === 0" x-transition>
+                <div class="text-center">
+                    <div class="w-24 h-24 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <i class="ri-rocket-line text-5xl text-blue-500"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold mb-4">설정을 시작합니다!</h2>
+                    <p class="text-gray-600 mb-8">
+                        네이버 스마트스토어, 쿠팡 연동 및 알림 설정을<br>
+                        단계별로 안내해 드립니다.
+                    </p>
+                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-left mb-6">
+                        <p class="font-medium text-yellow-800 mb-2">📋 준비물</p>
+                        <ul class="text-sm text-yellow-700 space-y-1">
+                            <li>• 네이버 커머스API 키 (선택)</li>
+                            <li>• 쿠팡 WING API 키 (선택)</li>
+                            <li>• 텔레그램 봇 토큰 (선택)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 1: 네이버 -->
+            <div x-show="currentStep === 1" x-transition>
+                <div class="flex items-center gap-3 mb-6">
+                    <div class="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
+                        <span class="text-green-600 font-bold text-xl">N</span>
+                    </div>
+                    <div>
+                        <h2 class="text-xl font-bold">네이버 스마트스토어</h2>
+                        <p class="text-sm text-gray-500">커머스API 연동</p>
+                    </div>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Client ID</label>
+                        <input type="text" x-model="settings.naver.client_id" 
+                               class="w-full rounded-lg border-gray-300 focus:ring-green-500 focus:border-green-500"
+                               placeholder="네이버 커머스API Client ID">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Client Secret</label>
+                        <input type="password" x-model="settings.naver.client_secret" 
+                               class="w-full rounded-lg border-gray-300 focus:ring-green-500 focus:border-green-500"
+                               placeholder="네이버 커머스API Client Secret">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Seller ID</label>
+                        <input type="text" x-model="settings.naver.seller_id" 
+                               class="w-full rounded-lg border-gray-300 focus:ring-green-500 focus:border-green-500"
+                               placeholder="판매자 ID">
+                    </div>
+                </div>
+
+                <div class="mt-6 p-4 bg-gray-50 rounded-lg">
+                    <p class="text-sm text-gray-600">
+                        <i class="ri-information-line mr-1"></i>
+                        API 키는 <a href="https://apicenter.commerce.naver.com" target="_blank" class="text-green-600 underline">네이버 커머스API센터</a>에서 발급받으세요.
+                    </p>
+                </div>
+
+                <div class="flex items-center gap-2 mt-4">
+                    <input type="checkbox" x-model="skipNaver" id="skip-naver" class="rounded text-green-500">
+                    <label for="skip-naver" class="text-sm text-gray-600">나중에 설정하기</label>
+                </div>
+            </div>
+
+            <!-- Step 2: 쿠팡 -->
+            <div x-show="currentStep === 2" x-transition>
+                <div class="flex items-center gap-3 mb-6">
+                    <div class="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
+                        <span class="text-red-600 font-bold text-xl">C</span>
+                    </div>
+                    <div>
+                        <h2 class="text-xl font-bold">쿠팡</h2>
+                        <p class="text-sm text-gray-500">WING API 연동</p>
+                    </div>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Vendor ID</label>
+                        <input type="text" x-model="settings.coupang.vendor_id" 
+                               class="w-full rounded-lg border-gray-300 focus:ring-red-500 focus:border-red-500"
+                               placeholder="쿠팡 Vendor ID">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Access Key</label>
+                        <input type="password" x-model="settings.coupang.access_key" 
+                               class="w-full rounded-lg border-gray-300 focus:ring-red-500 focus:border-red-500"
+                               placeholder="OPEN API Access Key">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Secret Key</label>
+                        <input type="password" x-model="settings.coupang.secret_key" 
+                               class="w-full rounded-lg border-gray-300 focus:ring-red-500 focus:border-red-500"
+                               placeholder="OPEN API Secret Key">
+                    </div>
+                </div>
+
+                <div class="mt-6 p-4 bg-gray-50 rounded-lg">
+                    <p class="text-sm text-gray-600">
+                        <i class="ri-information-line mr-1"></i>
+                        API 키는 <a href="https://wing.coupang.com" target="_blank" class="text-red-600 underline">쿠팡 WING</a> > 판매자정보 > OPEN API에서 발급받으세요.
+                    </p>
+                </div>
+
+                <div class="flex items-center gap-2 mt-4">
+                    <input type="checkbox" x-model="skipCoupang" id="skip-coupang" class="rounded text-red-500">
+                    <label for="skip-coupang" class="text-sm text-gray-600">나중에 설정하기</label>
+                </div>
+            </div>
+
+            <!-- Step 3: 텔레그램 -->
+            <div x-show="currentStep === 3" x-transition>
+                <div class="flex items-center gap-3 mb-6">
+                    <div class="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
+                        <i class="ri-telegram-line text-2xl text-blue-500"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-xl font-bold">텔레그램 알림</h2>
+                        <p class="text-sm text-gray-500">실시간 알림 수신 (선택)</p>
+                    </div>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Bot Token</label>
+                        <input type="password" x-model="settings.telegram.bot_token" 
+                               class="w-full rounded-lg border-gray-300 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="123456789:ABCdefGHI...">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Chat ID</label>
+                        <input type="text" x-model="settings.telegram.chat_id" 
+                               class="w-full rounded-lg border-gray-300 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="-100123456789">
+                    </div>
+                </div>
+
+                <div class="mt-6 p-4 bg-gray-50 rounded-lg space-y-2">
+                    <p class="text-sm font-medium text-gray-700">텔레그램 봇 만들기:</p>
+                    <ol class="text-sm text-gray-600 space-y-1">
+                        <li>1. @BotFather 에게 /newbot 명령</li>
+                        <li>2. 봇 이름 설정 후 토큰 복사</li>
+                        <li>3. 봇과 대화 시작 후 @userinfobot 에서 Chat ID 확인</li>
+                    </ol>
+                </div>
+
+                <div class="flex items-center gap-2 mt-4">
+                    <input type="checkbox" x-model="skipTelegram" id="skip-telegram" class="rounded text-blue-500">
+                    <label for="skip-telegram" class="text-sm text-gray-600">나중에 설정하기</label>
+                </div>
+            </div>
+
+            <!-- Step 4: 스케줄 -->
+            <div x-show="currentStep === 4" x-transition>
+                <div class="flex items-center gap-3 mb-6">
+                    <div class="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center">
+                        <i class="ri-time-line text-2xl text-purple-500"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-xl font-bold">스케줄 설정</h2>
+                        <p class="text-sm text-gray-500">자동 송장 처리 시간</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">1차 송장 처리</label>
+                        <input type="time" x-model="settings.schedule.first_batch" 
+                               class="w-full rounded-lg border-gray-300 focus:ring-purple-500 focus:border-purple-500">
+                        <p class="text-xs text-gray-500 mt-1">오전 주문 일괄 발송</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">2차 송장 처리</label>
+                        <input type="time" x-model="settings.schedule.second_batch" 
+                               class="w-full rounded-lg border-gray-300 focus:ring-purple-500 focus:border-purple-500">
+                        <p class="text-xs text-gray-500 mt-1">오후 주문 일괄 발송</p>
+                    </div>
+                </div>
+
+                <div class="mt-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+                    <p class="text-sm text-purple-700">
+                        <i class="ri-lightbulb-line mr-1"></i>
+                        일반적으로 12:00 (1차), 15:30 (2차) 처리를 권장합니다.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Step 5: 완료 -->
+            <div x-show="currentStep === 5" x-transition>
+                <div class="text-center">
+                    <div class="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <i class="ri-check-double-line text-5xl text-green-500"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold mb-4">설정 완료!</h2>
+                    <p class="text-gray-600 mb-6">
+                        모든 설정이 완료되었습니다.<br>
+                        지금 바로 쇼핑몰 자동화를 시작하세요!
+                    </p>
+
+                    <!-- 설정 요약 -->
+                    <div class="bg-gray-50 rounded-lg p-4 text-left mb-6">
+                        <p class="font-medium mb-2">📋 설정 요약</p>
+                        <div class="space-y-1 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">스마트스토어</span>
+                                <span :class="skipNaver ? 'text-gray-400' : 'text-green-600'" 
+                                      x-text="skipNaver ? '미설정' : '설정됨'"></span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">쿠팡</span>
+                                <span :class="skipCoupang ? 'text-gray-400' : 'text-green-600'" 
+                                      x-text="skipCoupang ? '미설정' : '설정됨'"></span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">텔레그램</span>
+                                <span :class="skipTelegram ? 'text-gray-400' : 'text-green-600'" 
+                                      x-text="skipTelegram ? '미설정' : '설정됨'"></span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">1차 처리</span>
+                                <span class="text-gray-800" x-text="settings.schedule.first_batch"></span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">2차 처리</span>
+                                <span class="text-gray-800" x-text="settings.schedule.second_batch"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <a href="/" class="inline-flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
+                        <i class="ri-dashboard-line"></i>
+                        대시보드로 이동
+                    </a>
+                </div>
+            </div>
+
+            <!-- 네비게이션 버튼 -->
+            <div class="flex justify-between mt-8 pt-6 border-t" x-show="currentStep < 5">
+                <button @click="prevStep()" 
+                        x-show="currentStep > 0"
+                        class="flex items-center gap-2 px-4 py-2 text-gray-600 hover:text-gray-800 transition">
+                    <i class="ri-arrow-left-line"></i>
+                    이전
+                </button>
+                <div x-show="currentStep === 0"></div>
+                
+                <button @click="nextStep()" 
+                        class="flex items-center gap-2 px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition ml-auto">
+                    <span x-text="currentStep === 4 ? '완료' : '다음'"></span>
+                    <i class="ri-arrow-right-line"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- 푸터 -->
+        <p class="text-center text-sm text-gray-500 mt-6">
+            문제가 있으신가요? 
+            <a href="https://github.com/YOUR_USERNAME/shop-mcp-server/issues" class="text-blue-500 hover:underline">
+                GitHub Issues
+            </a>에서 도움을 받으세요.
+        </p>
+    </div>
+
+    <script>
+    function wizard() {
+        return {
+            currentStep: 0,
+            steps: ['시작', '스마트스토어', '쿠팡', '텔레그램', '스케줄', '완료'],
+            
+            skipNaver: false,
+            skipCoupang: false,
+            skipTelegram: false,
+            
+            settings: {
+                naver: { client_id: '', client_secret: '', seller_id: '' },
+                coupang: { vendor_id: '', access_key: '', secret_key: '' },
+                telegram: { bot_token: '', chat_id: '' },
+                schedule: { first_batch: '12:00', second_batch: '15:30' }
+            },
+            
+            async nextStep() {
+                // 현재 단계 저장
+                await this.saveCurrentStep();
+                
+                if (this.currentStep < this.steps.length - 1) {
+                    this.currentStep++;
+                }
+            },
+            
+            prevStep() {
+                if (this.currentStep > 0) {
+                    this.currentStep--;
+                }
+            },
+            
+            async saveCurrentStep() {
+                try {
+                    if (this.currentStep === 1 && !this.skipNaver && this.settings.naver.client_id) {
+                        await fetch('/api/v1/settings/naver', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.settings.naver)
+                        });
+                    }
+                    
+                    if (this.currentStep === 2 && !this.skipCoupang && this.settings.coupang.vendor_id) {
+                        await fetch('/api/v1/settings/coupang', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.settings.coupang)
+                        });
+                    }
+                    
+                    if (this.currentStep === 3 && !this.skipTelegram && this.settings.telegram.bot_token) {
+                        await fetch('/api/v1/settings/telegram', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.settings.telegram)
+                        });
+                    }
+                    
+                    if (this.currentStep === 4) {
+                        await fetch('/api/v1/settings/schedule', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.settings.schedule)
+                        });
+                    }
+                } catch (e) {
+                    console.error('설정 저장 오류:', e);
+                }
+            }
+        }
+    }
+    </script>
+</body>
+</html>

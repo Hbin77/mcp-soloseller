@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  shop-mcp-server:
+    build: .
+    container_name: shop-mcp-server
+    restart: unless-stopped
+    
+    ports:
+      - "8080:8080"
+    
+    volumes:
+      # 데이터 영속성 (SQLite DB)
+      - ./data:/app/data
+      # 로그 파일
+      - ./logs:/app/logs
+      # 설정 파일 (선택적으로 외부에서 마운트)
+      - ./config:/app/config
+    
+    environment:
+      - TZ=Asia/Seoul
+      - PYTHONUNBUFFERED=1
+    
+    env_file:
+      - .env
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# 볼륨 정의 (필요 시)
+volumes:
+  shop-data:
+  shop-logs:
+
+# 네트워크 (시놀로지 NAS 환경에서 필요 시)
+networks:
+  default:
+    name: shop-network
