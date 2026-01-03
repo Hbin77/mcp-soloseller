@@ -10,16 +10,20 @@ import time
 from typing import Optional, List
 from datetime import datetime, timedelta
 from . import BaseChannelClient, ChannelOrder, ChannelOrderItem, ChannelClaim
+from typing import TYPE_CHECKING
 import structlog
+
+if TYPE_CHECKING:
+    from src.auth import UserCredentials
 
 logger = structlog.get_logger()
 
 
 class NaverCommerceClient(BaseChannelClient):
     """네이버 커머스 API 클라이언트"""
-    
+
     BASE_URL = "https://api.commerce.naver.com/external"
-    
+
     def __init__(self, client_id: str, client_secret: str, seller_id: str):
         super().__init__()
         self.client_id = client_id
@@ -28,6 +32,17 @@ class NaverCommerceClient(BaseChannelClient):
         self.access_token: Optional[str] = None
         self.token_expires_at: Optional[datetime] = None
         self.http_client = httpx.AsyncClient(timeout=30.0)
+
+    @classmethod
+    def from_credentials(cls, credentials: "UserCredentials") -> Optional["NaverCommerceClient"]:
+        """UserCredentials에서 클라이언트 생성 (PlayMCP용)"""
+        if not credentials.naver_configured:
+            return None
+        return cls(
+            client_id=credentials.naver_client_id,
+            client_secret=credentials.naver_client_secret,
+            seller_id=credentials.naver_seller_id
+        )
     
     @property
     def channel_name(self) -> str:

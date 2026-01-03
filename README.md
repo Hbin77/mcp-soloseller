@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://docker.com)
 
-[빠른 시작](#빠른-시작) | [설정 가이드](#설정) | [API 문서](#api-문서) | [배포 가이드](#배포)
+[빠른 시작](#빠른-시작) | [설정 가이드](#설정) | [API 문서](#api-문서) | [MCP 연동](#claude-mcp-연동)
 
 </div>
 
@@ -130,9 +130,10 @@ CORS_ORIGINS=https://your-domain.com
 ```
 shop-mcp-server/
 ├── src/
-│   ├── main.py              # 메인 서버 (FastAPI + MCP)
+│   ├── main.py              # 메인 서버 (FastAPI + MCP + Streamable HTTP)
 │   ├── config.py            # 설정 관리
 │   ├── database.py          # SQLAlchemy ORM 모델
+│   ├── auth.py              # PlayMCP 인증 (HTTP 헤더 기반)
 │   ├── security.py          # 보안/인증
 │   ├── webhooks.py          # 웹훅 관리
 │   ├── api/                  # REST API 라우터
@@ -161,10 +162,11 @@ shop-mcp-server/
 
 | 컴포넌트 | 설명 |
 |----------|------|
-| `src/main.py` | FastAPI REST API + MCP 서버(SSE 전송) 결합. `ShopAutomationServer` 클래스가 모든 기능 관리 |
+| `src/main.py` | FastAPI REST API + MCP 서버 (SSE + Streamable HTTP 전송 지원) |
+| `src/auth.py` | PlayMCP 인증 모듈 (HTTP 헤더에서 사용자별 API 키 추출) |
 | `src/database.py` | SQLAlchemy 비동기 ORM 모델 (Product, Order, Claim 등) |
 | `src/config.py` | Pydantic Settings 기반 환경 설정 |
-| `src/channels/` | 네이버, 쿠팡 API 클라이언트 |
+| `src/channels/` | 네이버, 쿠팡 API 클라이언트 (사용자별 인증 지원) |
 | `src/notifications/` | 텔레그램, Slack, 이메일 알림 |
 
 ### 스케줄 작업
@@ -253,52 +255,50 @@ Claude: 재고 부족 상품 3개가 있습니다:
 
 ---
 
-## 배포
+## PlayMCP 연동
 
-### 시놀로지 NAS + Docker
+[카카오 PlayMCP](https://playmcp.kakao.com)에 이 MCP 서버를 등록하여 다양한 AI 서비스에서 사용할 수 있습니다.
 
-```bash
-# SSH 접속
-ssh admin@YOUR_NAS_IP
+### PlayMCP 등록 방법
 
-# 디렉토리 생성 및 클론
-cd /volume1/docker
-git clone https://github.com/YOUR_USERNAME/shop-mcp-server.git
-cd shop-mcp-server
+1. **서버 배포**: 공개적으로 접근 가능한 HTTPS 엔드포인트 필요
+2. **PlayMCP 개발자 콘솔 접속**: https://playmcp.kakao.com
+3. **MCP 서버 등록**:
+   - 엔드포인트: `https://your-domain.com/mcp`
+   - 전송 방식: Streamable HTTP
+   - 인증 방식: Key/Token (HTTP 헤더)
 
-# 환경 설정
-cp .env.example .env
-vi .env  # API 키 입력
+### 인증 헤더 설정
 
-# 실행
-docker-compose up -d
+PlayMCP에서 사용자별로 API 키를 입력받아 전달합니다:
+
+| 헤더 | 설명 | 필수 |
+|------|------|------|
+| `X-Naver-Client-Id` | 네이버 커머스 API Client ID | 선택 |
+| `X-Naver-Client-Secret` | 네이버 커머스 API Client Secret | 선택 |
+| `X-Naver-Seller-Id` | 네이버 스마트스토어 판매자 ID | 선택 |
+| `X-Coupang-Vendor-Id` | 쿠팡 WING Vendor ID | 선택 |
+| `X-Coupang-Access-Key` | 쿠팡 WING Access Key | 선택 |
+| `X-Coupang-Secret-Key` | 쿠팡 WING Secret Key | 선택 |
+
+### MCP 엔드포인트
+
+| 엔드포인트 | 설명 |
+|------------|------|
+| `POST /mcp` | Streamable HTTP MCP 엔드포인트 (PlayMCP용) |
+| `GET /sse` | SSE 엔드포인트 (Claude Desktop용) |
+| `GET /mcp/info` | 서버 메타데이터 (등록 시 참조용) |
+
+### 사용자 경험
+
 ```
+1. PlayMCP에서 "쇼핑몰 자동화" MCP 서버 선택
+2. 자신의 네이버/쿠팡 API 키 입력 (최초 1회)
+3. AI 채팅으로 쇼핑몰 관리 시작!
 
-### Cloudflare Tunnel 연동
-
-1. [Cloudflare Zero Trust](https://one.dash.cloudflare.com) 대시보드에서 Tunnel 생성
-
-2. 시놀로지 NAS에 `cloudflared` 설치:
-```bash
-# Docker로 cloudflared 실행
-docker run -d --name cloudflared \
-  cloudflare/cloudflared:latest tunnel --no-autoupdate run \
-  --token YOUR_TUNNEL_TOKEN
-```
-
-3. Tunnel 설정 (config.yml):
-```yaml
-tunnel: <TUNNEL_ID>
-credentials-file: /root/.cloudflared/<TUNNEL_ID>.json
-ingress:
-  - hostname: shop.your-domain.com
-    service: http://localhost:8080
-  - service: http_status:404
-```
-
-4. 프로덕션 환경 변수 설정:
-```env
-CORS_ORIGINS=https://shop.your-domain.com
+예시:
+사용자: 오늘 주문 현황 알려줘
+AI: 네이버 스마트스토어 15건, 쿠팡 17건의 주문이 있습니다.
 ```
 
 ---
@@ -386,6 +386,7 @@ MIT License - 자유롭게 사용, 수정, 배포할 수 있습니다.
 
 - 버그 리포트: [Issues](https://github.com/YOUR_USERNAME/shop-mcp-server/issues)
 - 기능 제안: [Discussions](https://github.com/YOUR_USERNAME/shop-mcp-server/discussions)
+- 이메일 문의: [phb007298@gmail.com](mailto:phb007298@gmail.com)
 
 ---
 

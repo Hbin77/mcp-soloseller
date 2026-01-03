@@ -10,22 +10,37 @@ from typing import Optional, List
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from . import BaseChannelClient, ChannelOrder, ChannelOrderItem, ChannelClaim
+from typing import TYPE_CHECKING
 import structlog
+
+if TYPE_CHECKING:
+    from src.auth import UserCredentials
 
 logger = structlog.get_logger()
 
 
 class CoupangWingClient(BaseChannelClient):
     """쿠팡 WING API 클라이언트"""
-    
+
     BASE_URL = "https://api-gateway.coupang.com"
-    
+
     def __init__(self, vendor_id: str, access_key: str, secret_key: str):
         super().__init__()
         self.vendor_id = vendor_id
         self.access_key = access_key
         self.secret_key = secret_key
         self.http_client = httpx.AsyncClient(timeout=30.0)
+
+    @classmethod
+    def from_credentials(cls, credentials: "UserCredentials") -> Optional["CoupangWingClient"]:
+        """UserCredentials에서 클라이언트 생성 (PlayMCP용)"""
+        if not credentials.coupang_configured:
+            return None
+        return cls(
+            vendor_id=credentials.coupang_vendor_id,
+            access_key=credentials.coupang_access_key,
+            secret_key=credentials.coupang_secret_key
+        )
     
     @property
     def channel_name(self) -> str:

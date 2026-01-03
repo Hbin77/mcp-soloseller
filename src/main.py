@@ -1,6 +1,10 @@
 """
 쇼핑몰 자동화 MCP 서버
 다채널 통합 + 자동 송장 처리 + 재고 관리
+
+PlayMCP 호환:
+- Streamable HTTP 전송 지원
+- HTTP 헤더 기반 사용자별 인증
 """
 import asyncio
 import json
@@ -11,9 +15,10 @@ from contextlib import asynccontextmanager
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import os
 from apscheduler.triggers.cron import CronTrigger
@@ -23,7 +28,7 @@ import structlog
 
 from src.config import get_settings, Settings
 from src.database import (
-    Database, Product, Order, OrderItem, StockHistory, Claim, 
+    Database, Product, Order, OrderItem, StockHistory, Claim,
     DeliveryTracking, ProcessingLog, OrderStatus, ChannelType,
     StockChangeReason, ClaimStatus, ClaimType
 )
@@ -31,6 +36,10 @@ from src.channels.naver import NaverCommerceClient
 from src.channels.coupang import CoupangWingClient
 from src.channels import ChannelOrder
 from src.notifications import NotificationManager, TelegramNotifier, SlackNotifier, EmailNotifier
+from src.auth import (
+    UserCredentials, extract_credentials_from_request,
+    get_user_credentials, set_user_credentials, PLAYMCP_AUTH_HEADERS
+)
 
 # 로깅 설정
 structlog.configure(
@@ -47,6 +56,19 @@ structlog.configure(
 )
 
 logger = structlog.get_logger()
+
+
+class CredentialsMiddleware(BaseHTTPMiddleware):
+    """HTTP 헤더에서 사용자 인증 정보를 추출하는 미들웨어 (PlayMCP용)"""
+
+    async def dispatch(self, request: Request, call_next):
+        # MCP 관련 엔드포인트에서만 인증 정보 추출
+        if request.url.path in ["/mcp", "/sse", "/messages"]:
+            credentials = extract_credentials_from_request(request)
+            set_user_credentials(credentials)
+
+        response = await call_next(request)
+        return response
 
 
 class ShopAutomationServer:
@@ -67,7 +89,25 @@ class ShopAutomationServer:
         
         # MCP Tools 등록
         self._register_tools()
-    
+
+    def _get_clients_for_request(self) -> tuple[Optional[NaverCommerceClient], Optional[CoupangWingClient]]:
+        """
+        현재 요청에 대한 채널 클라이언트 반환
+
+        PlayMCP 모드: HTTP 헤더의 사용자 인증 정보로 클라이언트 생성
+        기본 모드: 환경 변수로 초기화된 글로벌 클라이언트 사용
+        """
+        credentials = get_user_credentials()
+
+        # PlayMCP 모드: 사용자 인증 정보가 있으면 새 클라이언트 생성
+        if credentials and credentials.has_any_credentials():
+            naver = NaverCommerceClient.from_credentials(credentials)
+            coupang = CoupangWingClient.from_credentials(credentials)
+            return naver, coupang
+
+        # 기본 모드: 글로벌 클라이언트 사용
+        return self.naver_client, self.coupang_client
+
     async def initialize(self):
         """서버 초기화"""
         logger.info("서버 초기화 시작")
@@ -212,35 +252,56 @@ class ShopAutomationServer:
         
         logger.info(f"{batch_number}차 송장 처리 완료", results=results)
     
-    async def _collect_new_orders(self) -> List[Order]:
-        """신규 주문 수집"""
+    async def _collect_new_orders(self, naver_client: Optional[NaverCommerceClient] = None,
+                                     coupang_client: Optional[CoupangWingClient] = None,
+                                     close_clients: bool = False) -> List[Order]:
+        """신규 주문 수집
+
+        Args:
+            naver_client: 네이버 클라이언트 (None이면 자동 선택)
+            coupang_client: 쿠팡 클라이언트 (None이면 자동 선택)
+            close_clients: 사용 후 클라이언트 종료 여부 (PlayMCP용 임시 클라이언트인 경우 True)
+        """
         all_orders = []
-        
+
+        # 클라이언트가 지정되지 않으면 요청별 클라이언트 사용
+        if naver_client is None and coupang_client is None:
+            naver_client, coupang_client = self._get_clients_for_request()
+            # 요청별 클라이언트가 생성된 경우 종료 필요
+            credentials = get_user_credentials()
+            close_clients = credentials is not None and credentials.has_any_credentials()
+
         async with self.db.async_session() as session:
             # 네이버 주문 수집
-            if self.naver_client:
+            if naver_client:
                 try:
-                    naver_orders = await self.naver_client.get_new_orders()
+                    naver_orders = await naver_client.get_new_orders()
                     for order_data in naver_orders:
                         order = await self._save_order(session, order_data, ChannelType.NAVER)
                         if order:
                             all_orders.append(order)
                 except Exception as e:
                     logger.exception("네이버 주문 수집 오류", error=str(e))
-            
+                finally:
+                    if close_clients:
+                        await naver_client.close()
+
             # 쿠팡 주문 수집
-            if self.coupang_client:
+            if coupang_client:
                 try:
-                    coupang_orders = await self.coupang_client.get_new_orders()
+                    coupang_orders = await coupang_client.get_new_orders()
                     for order_data in coupang_orders:
                         order = await self._save_order(session, order_data, ChannelType.COUPANG)
                         if order:
                             all_orders.append(order)
                 except Exception as e:
                     logger.exception("쿠팡 주문 수집 오류", error=str(e))
-            
+                finally:
+                    if close_clients:
+                        await coupang_client.close()
+
             await session.commit()
-        
+
         return all_orders
     
     async def _save_order(self, session: AsyncSession, order_data: ChannelOrder, channel: ChannelType) -> Optional[Order]:
@@ -599,68 +660,88 @@ class ShopAutomationServer:
     async def _tool_sync_stock_all_channels(self) -> dict:
         """모든 채널 재고 동기화"""
         results = {"naver": 0, "coupang": 0, "errors": []}
-        
-        async with self.db.async_session() as session:
-            result = await session.execute(select(Product).where(Product.is_active == True))
-            products = result.scalars().all()
-            
-            for product in products:
-                # 네이버 동기화
-                if product.naver_product_id and self.naver_client:
-                    try:
-                        success = await self.naver_client.update_stock(
-                            product.naver_product_id,
-                            product.stock_quantity
-                        )
-                        if success:
-                            results["naver"] += 1
-                    except Exception as e:
-                        results["errors"].append(f"네이버 {product.sku}: {str(e)}")
-                
-                # 쿠팡 동기화
-                if product.coupang_product_id and self.coupang_client:
-                    try:
-                        success = await self.coupang_client.update_stock(
-                            product.coupang_product_id,
-                            product.stock_quantity
-                        )
-                        if success:
-                            results["coupang"] += 1
-                    except Exception as e:
-                        results["errors"].append(f"쿠팡 {product.sku}: {str(e)}")
-        
+        naver_client, coupang_client = self._get_clients_for_request()
+        credentials = get_user_credentials()
+        close_clients = credentials is not None and credentials.has_any_credentials()
+
+        try:
+            async with self.db.async_session() as session:
+                result = await session.execute(select(Product).where(Product.is_active == True))
+                products = result.scalars().all()
+
+                for product in products:
+                    # 네이버 동기화
+                    if product.naver_product_id and naver_client:
+                        try:
+                            success = await naver_client.update_stock(
+                                product.naver_product_id,
+                                product.stock_quantity
+                            )
+                            if success:
+                                results["naver"] += 1
+                        except Exception as e:
+                            results["errors"].append(f"네이버 {product.sku}: {str(e)}")
+
+                    # 쿠팡 동기화
+                    if product.coupang_product_id and coupang_client:
+                        try:
+                            success = await coupang_client.update_stock(
+                                product.coupang_product_id,
+                                product.stock_quantity
+                            )
+                            if success:
+                                results["coupang"] += 1
+                        except Exception as e:
+                            results["errors"].append(f"쿠팡 {product.sku}: {str(e)}")
+        finally:
+            if close_clients:
+                if naver_client:
+                    await naver_client.close()
+                if coupang_client:
+                    await coupang_client.close()
+
         return {"success": True, "results": results}
     
     async def _tool_get_claims(self) -> dict:
         """클레임 조회"""
         all_claims = []
-        
-        if self.naver_client:
-            claims = await self.naver_client.get_claims()
-            for c in claims:
-                all_claims.append({
-                    "channel": "naver",
-                    "claim_id": c.channel_claim_id,
-                    "order_id": c.channel_order_id,
-                    "type": c.claim_type,
-                    "status": c.status,
-                    "reason": c.reason,
-                    "requested_at": c.requested_at.isoformat()
-                })
-        
-        if self.coupang_client:
-            claims = await self.coupang_client.get_claims()
-            for c in claims:
-                all_claims.append({
-                    "channel": "coupang",
-                    "claim_id": c.channel_claim_id,
-                    "order_id": c.channel_order_id,
-                    "type": c.claim_type,
-                    "status": c.status,
-                    "reason": c.reason,
-                    "requested_at": c.requested_at.isoformat()
-                })
-        
+        naver_client, coupang_client = self._get_clients_for_request()
+        credentials = get_user_credentials()
+        close_clients = credentials is not None and credentials.has_any_credentials()
+
+        try:
+            if naver_client:
+                claims = await naver_client.get_claims()
+                for c in claims:
+                    all_claims.append({
+                        "channel": "naver",
+                        "claim_id": c.channel_claim_id,
+                        "order_id": c.channel_order_id,
+                        "type": c.claim_type,
+                        "status": c.status,
+                        "reason": c.reason,
+                        "requested_at": c.requested_at.isoformat()
+                    })
+
+            if coupang_client:
+                claims = await coupang_client.get_claims()
+                for c in claims:
+                    all_claims.append({
+                        "channel": "coupang",
+                        "claim_id": c.channel_claim_id,
+                        "order_id": c.channel_order_id,
+                        "type": c.claim_type,
+                        "status": c.status,
+                        "reason": c.reason,
+                        "requested_at": c.requested_at.isoformat()
+                    })
+        finally:
+            if close_clients:
+                if naver_client:
+                    await naver_client.close()
+                if coupang_client:
+                    await coupang_client.close()
+
         return {"success": True, "count": len(all_claims), "claims": all_claims}
     
     async def _tool_get_daily_report(self, date_str: Optional[str] = None) -> dict:
@@ -841,6 +922,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# PlayMCP 인증 미들웨어 추가
+app.add_middleware(CredentialsMiddleware)
+
 # API 라우터 등록
 from src.api.dashboard import router as dashboard_router
 from src.api.orders import router as orders_router
@@ -883,23 +967,121 @@ async def setup_wizard():
         return FileResponse(setup_path)
     return {"error": "Setup page not found"}
 
-# SSE 엔드포인트
+# SSE 엔드포인트 (기존 방식)
 @app.get("/sse")
 async def sse_endpoint():
     from starlette.responses import StreamingResponse
     transport = SseServerTransport("/messages")
-    
+
     async def event_generator():
         async with transport.connect_sse(server.mcp) as streams:
             async for event in streams:
                 yield event
-    
+
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+
 @app.post("/messages")
-async def messages_endpoint(request):
+async def messages_endpoint(request: Request):
+    """SSE 메시지 처리"""
     # MCP 메시지 처리
     pass
+
+
+# Streamable HTTP 엔드포인트 (PlayMCP용)
+@app.post("/mcp")
+async def streamable_http_endpoint(request: Request):
+    """
+    Streamable HTTP MCP 엔드포인트 (PlayMCP 호환)
+
+    PlayMCP에서 호출하며, HTTP 헤더에서 사용자 인증 정보를 추출합니다.
+    """
+    from starlette.responses import StreamingResponse
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid JSON"}
+        )
+
+    # JSON-RPC 요청 처리
+    method = body.get("method")
+    params = body.get("params", {})
+    request_id = body.get("id")
+
+    result = None
+    error = None
+
+    try:
+        if method == "tools/list":
+            # 도구 목록 반환
+            tools = await server.mcp.list_tools()
+            result = {"tools": [t.model_dump() for t in tools]}
+
+        elif method == "tools/call":
+            # 도구 실행
+            tool_name = params.get("name")
+            arguments = params.get("arguments", {})
+            tool_result = await server._handle_tool(tool_name, arguments)
+            result = {"content": [{"type": "text", "text": json.dumps(tool_result, ensure_ascii=False)}]}
+
+        elif method == "initialize":
+            # 초기화 응답
+            result = {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {"listChanged": False}
+                },
+                "serverInfo": {
+                    "name": "shop-automation",
+                    "version": "1.0.0"
+                }
+            }
+
+        else:
+            error = {"code": -32601, "message": f"Method not found: {method}"}
+
+    except Exception as e:
+        logger.exception("MCP 요청 처리 오류", method=method, error=str(e))
+        error = {"code": -32603, "message": str(e)}
+
+    # JSON-RPC 응답
+    response = {"jsonrpc": "2.0", "id": request_id}
+    if error:
+        response["error"] = error
+    else:
+        response["result"] = result
+
+    return JSONResponse(content=response)
+
+
+# PlayMCP 서버 메타데이터 엔드포인트
+@app.get("/mcp/info")
+async def mcp_info():
+    """MCP 서버 정보 (PlayMCP 등록용)"""
+    return {
+        "name": "shop-automation",
+        "description": "다채널 쇼핑몰 자동화 MCP 서버 (네이버 스마트스토어, 쿠팡 지원)",
+        "version": "1.0.0",
+        "transport": ["sse", "streamable-http"],
+        "authentication": PLAYMCP_AUTH_HEADERS,
+        "tools": [
+            {"name": "get_new_orders", "description": "모든 채널에서 신규 주문 수집"},
+            {"name": "get_pending_orders", "description": "발송 대기 중인 주문 목록"},
+            {"name": "process_batch", "description": "수동으로 배치 처리 실행"},
+            {"name": "get_stock", "description": "상품 재고 조회"},
+            {"name": "update_stock", "description": "재고 수량 업데이트"},
+            {"name": "get_low_stock_alerts", "description": "재고 부족 상품 목록"},
+            {"name": "sync_stock_all_channels", "description": "모든 채널 재고 동기화"},
+            {"name": "get_claims", "description": "반품/교환/취소 요청 조회"},
+            {"name": "get_daily_report", "description": "일일 리포트 조회"},
+            {"name": "get_processing_logs", "description": "배치 처리 이력 조회"},
+            {"name": "add_product", "description": "신규 상품 등록"},
+            {"name": "list_products", "description": "상품 목록 조회"}
+        ]
+    }
 
 @app.get("/health")
 async def health_check():
