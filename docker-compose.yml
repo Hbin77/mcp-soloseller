@@ -14,15 +14,14 @@ services:
       - ./data:/app/data
       # 로그 파일
       - ./logs:/app/logs
-      # 설정 파일 (선택적으로 외부에서 마운트)
-      - ./config:/app/config
-    
+
     environment:
       - TZ=Asia/Seoul
       - PYTHONUNBUFFERED=1
-    
-    env_file:
-      - .env
+      # 기본값 설정 (PlayMCP 모드에서는 HTTP 헤더로 인증)
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8080
+      - DATABASE_URL=sqlite+aiosqlite:///./data/shop.db
     
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -37,12 +36,3 @@ services:
         max-size: "10m"
         max-file: "3"
 
-# 볼륨 정의 (필요 시)
-volumes:
-  shop-data:
-  shop-logs:
-
-# 네트워크 (시놀로지 NAS 환경에서 필요 시)
-networks:
-  default:
-    name: shop-network
