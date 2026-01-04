@@ -40,6 +40,7 @@ from src.auth import (
     UserCredentials, extract_credentials_from_request,
     get_user_credentials, set_user_credentials, PLAYMCP_AUTH_HEADERS
 )
+from src.shipping.manager import ShippingManager
 
 # 로깅 설정
 structlog.configure(
@@ -83,10 +84,13 @@ class ShopAutomationServer:
         # 채널 클라이언트
         self.naver_client: Optional[NaverCommerceClient] = None
         self.coupang_client: Optional[CoupangWingClient] = None
-        
+
+        # 배송 관리자
+        self.shipping_manager: Optional[ShippingManager] = None
+
         # 알림 관리자
         self.notifier: Optional[NotificationManager] = None
-        
+
         # MCP Tools 등록
         self._register_tools()
 
@@ -132,7 +136,13 @@ class ShopAutomationServer:
                 self.settings.coupang_secret_key
             )
             logger.info("쿠팡 클라이언트 초기화 완료")
-        
+
+        # 배송 관리자 초기화
+        self.shipping_manager = ShippingManager(self.settings)
+        logger.info("배송 관리자 초기화 완료",
+                    sender_configured=self.settings.sender_configured,
+                    default_carrier=self.settings.default_carrier)
+
         # 알림 관리자 초기화
         telegram = None
         if self.settings.telegram_configured:
@@ -225,11 +235,28 @@ class ShopAutomationServer:
                     confirmed = await self._confirm_order(order)
                     if confirmed:
                         results["confirmed"] += 1
-                        
-                        # 송장 발급 (TODO: CJ대한통운 연동)
-                        # 현재는 더미 송장번호 생성
-                        tracking_number = f"TEST{datetime.now().strftime('%Y%m%d%H%M%S')}{order.id}"
-                        
+
+                        # 송장 발급 (ShippingManager 사용)
+                        tracking_number = None
+                        if self.shipping_manager and self.shipping_manager.sender_info:
+                            # ShippingManager를 통한 실제 송장 발급
+                            shipping_response = await self.shipping_manager.request_invoice_for_order(order)
+                            if shipping_response.success:
+                                tracking_number = shipping_response.tracking_number
+                                logger.info("송장 발급 성공",
+                                            order_id=order.id,
+                                            tracking_number=tracking_number,
+                                            carrier=shipping_response.carrier_name)
+                            else:
+                                logger.warning("송장 발급 실패 - 더미 송장 사용",
+                                               order_id=order.id,
+                                               error=shipping_response.error)
+
+                        # 송장 발급 실패 시 더미 송장번호 생성 (폴백)
+                        if not tracking_number:
+                            tracking_number = f"TEST{datetime.now().strftime('%Y%m%d%H%M%S')}{order.id}"
+                            logger.info("더미 송장 생성", order_id=order.id, tracking_number=tracking_number)
+
                         # 채널에 송장 등록
                         registered = await self._register_invoice_to_channel(order, tracking_number)
                         if registered:
@@ -878,16 +905,18 @@ class ShopAutomationServer:
     async def cleanup(self):
         """서버 종료 시 정리"""
         logger.info("서버 종료 중...")
-        
+
         self.scheduler.shutdown()
-        
+
         if self.naver_client:
             await self.naver_client.close()
         if self.coupang_client:
             await self.coupang_client.close()
+        if self.shipping_manager:
+            await self.shipping_manager.close()
         if self.notifier:
             await self.notifier.close()
-        
+
         logger.info("서버 종료 완료")
 
 

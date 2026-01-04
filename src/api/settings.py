@@ -57,6 +57,50 @@ class StockSettings(BaseModel):
     alert_threshold: int = 5
 
 
+class SenderSettings(BaseModel):
+    """발송인 정보"""
+    name: str
+    phone: str
+    zipcode: str
+    address: str
+
+
+class CJCarrierSettings(BaseModel):
+    """CJ대한통운 설정"""
+    customer_id: str
+    api_key: str
+    contract_code: Optional[str] = None
+
+
+class HanjinCarrierSettings(BaseModel):
+    """한진택배 설정"""
+    customer_id: str
+    api_key: str
+
+
+class LotteCarrierSettings(BaseModel):
+    """롯데택배 설정"""
+    customer_id: str
+    api_key: str
+
+
+class LogenCarrierSettings(BaseModel):
+    """로젠택배 설정"""
+    customer_id: str
+    api_key: str
+
+
+class EpostCarrierSettings(BaseModel):
+    """우체국택배 설정"""
+    customer_id: str
+    api_key: str
+
+
+class DefaultCarrierSettings(BaseModel):
+    """기본 택배사 설정"""
+    carrier: str = "cj"  # cj, hanjin, lotte, logen, epost
+
+
 @router.get("")
 async def get_settings():
     """현재 설정 조회 (민감 정보 마스킹)"""
@@ -91,6 +135,36 @@ async def get_settings():
         },
         "stock": {
             "alert_threshold": settings.stock_alert_threshold
+        },
+        "sender": {
+            "configured": settings.sender_configured,
+            "name": settings.sender_name,
+            "phone": mask(settings.sender_phone),
+            "zipcode": settings.sender_zipcode,
+            "address": settings.sender_address
+        },
+        "carriers": {
+            "default": settings.default_carrier,
+            "cj": {
+                "configured": settings.cj_configured,
+                "customer_id": mask(settings.cj_customer_id)
+            },
+            "hanjin": {
+                "configured": settings.hanjin_configured,
+                "customer_id": mask(settings.hanjin_customer_id)
+            },
+            "lotte": {
+                "configured": settings.lotte_configured,
+                "customer_id": mask(settings.lotte_customer_id)
+            },
+            "logen": {
+                "configured": settings.logen_configured,
+                "customer_id": mask(settings.logen_customer_id)
+            },
+            "epost": {
+                "configured": settings.epost_configured,
+                "customer_id": mask(settings.epost_customer_id)
+            }
         }
     }
 
@@ -344,7 +418,7 @@ async def export_settings():
     """설정 내보내기 (민감 정보 제외)"""
     from ..config import get_settings
     settings = get_settings()
-    
+
     return {
         "schedule": {
             "first_batch": settings.schedule_first_batch,
@@ -354,4 +428,202 @@ async def export_settings():
         "stock": {
             "alert_threshold": settings.stock_alert_threshold
         }
+    }
+
+
+# ============================================
+# 발송인 설정
+# ============================================
+
+@router.post("/sender")
+async def update_sender_settings(settings: SenderSettings):
+    """발송인 정보 업데이트"""
+    current = load_settings()
+    current["sender"] = settings.model_dump()
+    save_settings(current)
+
+    # 환경 변수 업데이트
+    os.environ["SENDER_NAME"] = settings.name
+    os.environ["SENDER_PHONE"] = settings.phone
+    os.environ["SENDER_ZIPCODE"] = settings.zipcode
+    os.environ["SENDER_ADDRESS"] = settings.address
+
+    # ShippingManager 재설정
+    from ..main import server
+    if server.shipping_manager:
+        from ..shipping.carriers import SenderInfo
+        server.shipping_manager.sender_info = SenderInfo(
+            name=settings.name,
+            phone=settings.phone,
+            zipcode=settings.zipcode,
+            address=settings.address
+        )
+
+    return {
+        "success": True,
+        "message": f"발송인 정보가 저장되었습니다 ({settings.name})"
+    }
+
+
+# ============================================
+# 택배사 설정
+# ============================================
+
+@router.get("/carriers")
+async def get_carriers():
+    """택배사 목록 및 설정 상태 조회"""
+    from ..main import server
+
+    if server.shipping_manager:
+        carriers = server.shipping_manager.get_available_carriers()
+    else:
+        from ..config import get_settings
+        settings = get_settings()
+        carriers = [
+            {"code": "cj", "name": "CJ대한통운", "configured": settings.cj_configured, "is_default": settings.default_carrier == "cj"},
+            {"code": "hanjin", "name": "한진택배", "configured": settings.hanjin_configured, "is_default": settings.default_carrier == "hanjin"},
+            {"code": "lotte", "name": "롯데택배", "configured": settings.lotte_configured, "is_default": settings.default_carrier == "lotte"},
+            {"code": "logen", "name": "로젠택배", "configured": settings.logen_configured, "is_default": settings.default_carrier == "logen"},
+            {"code": "epost", "name": "우체국택배", "configured": settings.epost_configured, "is_default": settings.default_carrier == "epost"},
+        ]
+
+    return {"carriers": carriers}
+
+
+@router.post("/carriers/default")
+async def set_default_carrier(settings: DefaultCarrierSettings):
+    """기본 택배사 설정"""
+    valid_carriers = ["cj", "hanjin", "lotte", "logen", "epost"]
+    if settings.carrier not in valid_carriers:
+        raise HTTPException(status_code=400, detail=f"유효하지 않은 택배사: {settings.carrier}")
+
+    current = load_settings()
+    current["default_carrier"] = settings.carrier
+    save_settings(current)
+
+    os.environ["DEFAULT_CARRIER"] = settings.carrier
+
+    carrier_names = {
+        "cj": "CJ대한통운",
+        "hanjin": "한진택배",
+        "lotte": "롯데택배",
+        "logen": "로젠택배",
+        "epost": "우체국택배"
+    }
+
+    return {
+        "success": True,
+        "message": f"기본 택배사가 {carrier_names[settings.carrier]}(으)로 설정되었습니다"
+    }
+
+
+@router.post("/carriers/cj")
+async def update_cj_settings(settings: CJCarrierSettings):
+    """CJ대한통운 설정 업데이트"""
+    current = load_settings()
+    current["cj"] = settings.model_dump()
+    save_settings(current)
+
+    # 환경 변수 업데이트
+    os.environ["CJ_CUSTOMER_ID"] = settings.customer_id
+    os.environ["CJ_API_KEY"] = settings.api_key
+    if settings.contract_code:
+        os.environ["CJ_CONTRACT_CODE"] = settings.contract_code
+
+    # ShippingManager의 CJ 클라이언트 재초기화
+    from ..main import server
+    if server.shipping_manager:
+        from ..shipping.carriers import CarrierType
+        from ..shipping.carriers.cj import CJLogisticsClient
+
+        # 기존 클라이언트 정리
+        old_carrier = server.shipping_manager.get_carrier(CarrierType.CJ)
+        if old_carrier:
+            await old_carrier.close()
+
+        # 새 클라이언트 설정
+        new_client = CJLogisticsClient(
+            customer_id=settings.customer_id,
+            api_key=settings.api_key,
+            contract_code=settings.contract_code,
+            test_mode=False
+        )
+        server.shipping_manager.set_carrier(CarrierType.CJ, new_client)
+
+        # 연결 테스트
+        connected = await new_client.authenticate()
+
+        return {
+            "success": True,
+            "connected": connected,
+            "message": "CJ대한통운 설정이 저장되었습니다" + (" (연결 성공)" if connected else " (연결 실패 - 테스트 모드로 동작)")
+        }
+
+    return {
+        "success": True,
+        "message": "CJ대한통운 설정이 저장되었습니다"
+    }
+
+
+@router.post("/carriers/hanjin")
+async def update_hanjin_settings(settings: HanjinCarrierSettings):
+    """한진택배 설정 업데이트"""
+    current = load_settings()
+    current["hanjin"] = settings.model_dump()
+    save_settings(current)
+
+    os.environ["HANJIN_CUSTOMER_ID"] = settings.customer_id
+    os.environ["HANJIN_API_KEY"] = settings.api_key
+
+    return {
+        "success": True,
+        "message": "한진택배 설정이 저장되었습니다 (추후 지원 예정)"
+    }
+
+
+@router.post("/carriers/lotte")
+async def update_lotte_settings(settings: LotteCarrierSettings):
+    """롯데택배 설정 업데이트"""
+    current = load_settings()
+    current["lotte"] = settings.model_dump()
+    save_settings(current)
+
+    os.environ["LOTTE_CUSTOMER_ID"] = settings.customer_id
+    os.environ["LOTTE_API_KEY"] = settings.api_key
+
+    return {
+        "success": True,
+        "message": "롯데택배 설정이 저장되었습니다 (추후 지원 예정)"
+    }
+
+
+@router.post("/carriers/logen")
+async def update_logen_settings(settings: LogenCarrierSettings):
+    """로젠택배 설정 업데이트"""
+    current = load_settings()
+    current["logen"] = settings.model_dump()
+    save_settings(current)
+
+    os.environ["LOGEN_CUSTOMER_ID"] = settings.customer_id
+    os.environ["LOGEN_API_KEY"] = settings.api_key
+
+    return {
+        "success": True,
+        "message": "로젠택배 설정이 저장되었습니다 (추후 지원 예정)"
+    }
+
+
+@router.post("/carriers/epost")
+async def update_epost_settings(settings: EpostCarrierSettings):
+    """우체국택배 설정 업데이트"""
+    current = load_settings()
+    current["epost"] = settings.model_dump()
+    save_settings(current)
+
+    os.environ["EPOST_CUSTOMER_ID"] = settings.customer_id
+    os.environ["EPOST_API_KEY"] = settings.api_key
+
+    return {
+        "success": True,
+        "message": "우체국택배 설정이 저장되었습니다 (추후 지원 예정)"
     }

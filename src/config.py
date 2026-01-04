@@ -29,9 +29,37 @@ class Settings(BaseSettings):
     coupang_access_key: Optional[str] = None
     coupang_secret_key: Optional[str] = None
     
+    # 발송인 정보 (전역 설정)
+    sender_name: Optional[str] = None
+    sender_phone: Optional[str] = None
+    sender_zipcode: Optional[str] = None
+    sender_address: Optional[str] = None
+
+    # 기본 택배사
+    default_carrier: str = Field(default="cj")
+
     # CJ대한통운
     cj_customer_id: Optional[str] = None
     cj_api_key: Optional[str] = None
+    cj_contract_code: Optional[str] = None
+
+    # 한진택배
+    hanjin_customer_id: Optional[str] = None
+    hanjin_api_key: Optional[str] = None
+
+    # 롯데택배
+    lotte_customer_id: Optional[str] = None
+    lotte_api_key: Optional[str] = None
+
+    # 로젠택배
+    logen_customer_id: Optional[str] = None
+    logen_api_key: Optional[str] = None
+
+    # 우체국택배
+    epost_customer_id: Optional[str] = None
+    epost_api_key: Optional[str] = None
+
+    # 배송 추적
     delivery_tracker_api_key: Optional[str] = None
     
     # Telegram
@@ -79,6 +107,36 @@ class Settings(BaseSettings):
     def telegram_configured(self) -> bool:
         """텔레그램 설정 여부"""
         return all([self.telegram_bot_token, self.telegram_chat_id])
+
+    @property
+    def sender_configured(self) -> bool:
+        """발송인 정보 설정 여부"""
+        return all([self.sender_name, self.sender_phone, self.sender_address])
+
+    @property
+    def cj_configured(self) -> bool:
+        """CJ대한통운 설정 여부"""
+        return all([self.cj_customer_id, self.cj_api_key])
+
+    @property
+    def hanjin_configured(self) -> bool:
+        """한진택배 설정 여부"""
+        return all([self.hanjin_customer_id, self.hanjin_api_key])
+
+    @property
+    def lotte_configured(self) -> bool:
+        """롯데택배 설정 여부"""
+        return all([self.lotte_customer_id, self.lotte_api_key])
+
+    @property
+    def logen_configured(self) -> bool:
+        """로젠택배 설정 여부"""
+        return all([self.logen_customer_id, self.logen_api_key])
+
+    @property
+    def epost_configured(self) -> bool:
+        """우체국택배 설정 여부"""
+        return all([self.epost_customer_id, self.epost_api_key])
 
 
 @lru_cache
