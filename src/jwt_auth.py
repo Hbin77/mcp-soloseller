@@ -24,14 +24,24 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+def _truncate_password(password: str, max_bytes: int = 72) -> str:
+    """bcrypt 72바이트 제한을 위해 비밀번호 truncate"""
+    encoded = password.encode('utf-8')
+    if len(encoded) <= max_bytes:
+        return password
+    # UTF-8 문자 경계를 존중하며 truncate
+    truncated = encoded[:max_bytes].decode('utf-8', errors='ignore')
+    return truncated
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """비밀번호 검증"""
-    return pwd_context.verify(plain_password, hashed_password)
+    return pwd_context.verify(_truncate_password(plain_password), hashed_password)
 
 
 def get_password_hash(password: str) -> str:
     """비밀번호 해시 생성"""
-    return pwd_context.hash(password)
+    return pwd_context.hash(_truncate_password(password))
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
