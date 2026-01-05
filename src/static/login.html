@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ko" x-data="authApp()" x-init="init()">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>로그인 - 쇼핑몰 자동화 MCP</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-600 to-purple-700 min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-md">
+        <!-- 로고 -->
+        <div class="text-center mb-8">
+            <div class="inline-flex items-center justify-center w-16 h-16 bg-white rounded-full shadow-lg mb-4">
+                <i class="ri-shopping-cart-2-line text-3xl text-blue-600"></i>
+            </div>
+            <h1 class="text-2xl font-bold text-white">쇼핑몰 자동화 MCP</h1>
+            <p class="text-blue-100 mt-1">다채널 통합 쇼핑몰 관리 시스템</p>
+        </div>
+
+        <!-- 탭 네비게이션 -->
+        <div class="bg-white/10 rounded-t-2xl p-1 flex">
+            <button @click="mode = 'login'"
+                    class="flex-1 py-3 px-4 rounded-xl text-sm font-medium transition"
+                    :class="mode === 'login' ? 'bg-white text-gray-900 shadow' : 'text-white hover:bg-white/10'">
+                로그인
+            </button>
+            <button @click="mode = 'signup'"
+                    class="flex-1 py-3 px-4 rounded-xl text-sm font-medium transition"
+                    :class="mode === 'signup' ? 'bg-white text-gray-900 shadow' : 'text-white hover:bg-white/10'">
+                회원가입
+            </button>
+        </div>
+
+        <!-- 폼 카드 -->
+        <div class="bg-white rounded-b-2xl shadow-xl p-8">
+            <!-- 에러 메시지 -->
+            <div x-show="error" x-cloak class="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                <p class="text-sm text-red-600" x-text="error"></p>
+            </div>
+
+            <!-- 성공 메시지 -->
+            <div x-show="success" x-cloak class="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                <p class="text-sm text-green-600" x-text="success"></p>
+            </div>
+
+            <!-- 로그인 폼 -->
+            <form x-show="mode === 'login'" @submit.prevent="login()" class="space-y-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">이메일</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="ri-mail-line text-gray-400"></i>
+                        </div>
+                        <input type="email" x-model="loginForm.email" required
+                               class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="your@email.com">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">비밀번호</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="ri-lock-line text-gray-400"></i>
+                        </div>
+                        <input :type="showPassword ? 'text' : 'password'" x-model="loginForm.password" required
+                               class="block w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="비밀번호">
+                        <button type="button" @click="showPassword = !showPassword"
+                                class="absolute inset-y-0 right-0 pr-3 flex items-center">
+                            <i :class="showPassword ? 'ri-eye-off-line' : 'ri-eye-line'" class="text-gray-400 hover:text-gray-600"></i>
+                        </button>
+                    </div>
+                </div>
+                <button type="submit" :disabled="loading"
+                        class="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                    <i x-show="loading" class="ri-loader-4-line animate-spin"></i>
+                    <span x-text="loading ? '로그인 중...' : '로그인'"></span>
+                </button>
+            </form>
+
+            <!-- 회원가입 폼 -->
+            <form x-show="mode === 'signup'" x-cloak @submit.prevent="signup()" class="space-y-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">이름</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="ri-user-line text-gray-400"></i>
+                        </div>
+                        <input type="text" x-model="signupForm.name" required
+                               class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="홍길동">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">이메일</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="ri-mail-line text-gray-400"></i>
+                        </div>
+                        <input type="email" x-model="signupForm.email" required
+                               class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="your@email.com">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">비밀번호</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="ri-lock-line text-gray-400"></i>
+                        </div>
+                        <input :type="showPassword ? 'text' : 'password'" x-model="signupForm.password" required minlength="6"
+                               class="block w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="최소 6자 이상">
+                        <button type="button" @click="showPassword = !showPassword"
+                                class="absolute inset-y-0 right-0 pr-3 flex items-center">
+                            <i :class="showPassword ? 'ri-eye-off-line' : 'ri-eye-line'" class="text-gray-400 hover:text-gray-600"></i>
+                        </button>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">비밀번호 확인</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="ri-lock-2-line text-gray-400"></i>
+                        </div>
+                        <input :type="showPassword ? 'text' : 'password'" x-model="signupForm.confirmPassword" required
+                               class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="비밀번호 재입력">
+                    </div>
+                </div>
+                <button type="submit" :disabled="loading"
+                        class="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                    <i x-show="loading" class="ri-loader-4-line animate-spin"></i>
+                    <span x-text="loading ? '가입 중...' : '회원가입'"></span>
+                </button>
+            </form>
+        </div>
+
+        <!-- 푸터 -->
+        <p class="text-center text-blue-100 text-sm mt-6">
+            MCP Server v1.0.0
+        </p>
+    </div>
+
+    <script>
+        function authApp() {
+            return {
+                mode: 'login',
+                loading: false,
+                error: '',
+                success: '',
+                showPassword: false,
+                loginForm: {
+                    email: '',
+                    password: ''
+                },
+                signupForm: {
+                    name: '',
+                    email: '',
+                    password: '',
+                    confirmPassword: ''
+                },
+
+                init() {
+                    // 이미 로그인되어 있으면 메인 페이지로 이동
+                    const token = localStorage.getItem('accessToken');
+                    if (token) {
+                        this.verifyToken(token);
+                    }
+                },
+
+                async verifyToken(token) {
+                    try {
+                        const response = await fetch('/api/v1/auth/me', {
+                            headers: {
+                                'Authorization': `Bearer ${token}`
+                            }
+                        });
+                        if (response.ok) {
+                            window.location.href = '/';
+                        } else {
+                            localStorage.removeItem('accessToken');
+                            localStorage.removeItem('refreshToken');
+                        }
+                    } catch (e) {
+                        localStorage.removeItem('accessToken');
+                        localStorage.removeItem('refreshToken');
+                    }
+                },
+
+                async login() {
+                    this.error = '';
+                    this.success = '';
+                    this.loading = true;
+
+                    try {
+                        const response = await fetch('/api/v1/auth/login', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(this.loginForm)
+                        });
+
+                        const data = await response.json();
+
+                        if (response.ok) {
+                            localStorage.setItem('accessToken', data.access_token);
+                            localStorage.setItem('refreshToken', data.refresh_token);
+                            window.location.href = '/';
+                        } else {
+                            this.error = data.detail || '로그인에 실패했습니다.';
+                        }
+                    } catch (e) {
+                        this.error = '서버와 통신할 수 없습니다.';
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                async signup() {
+                    this.error = '';
+                    this.success = '';
+
+                    if (this.signupForm.password !== this.signupForm.confirmPassword) {
+                        this.error = '비밀번호가 일치하지 않습니다.';
+                        return;
+                    }
+
+                    if (this.signupForm.password.length < 6) {
+                        this.error = '비밀번호는 최소 6자 이상이어야 합니다.';
+                        return;
+                    }
+
+                    this.loading = true;
+
+                    try {
+                        const response = await fetch('/api/v1/auth/signup', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                name: this.signupForm.name,
+                                email: this.signupForm.email,
+                                password: this.signupForm.password
+                            })
+                        });
+
+                        const data = await response.json();
+
+                        if (response.ok) {
+                            localStorage.setItem('accessToken', data.access_token);
+                            localStorage.setItem('refreshToken', data.refresh_token);
+                            window.location.href = '/';
+                        } else {
+                            this.error = data.detail || '회원가입에 실패했습니다.';
+                        }
+                    } catch (e) {
+                        this.error = '서버와 통신할 수 없습니다.';
+                    } finally {
+                        this.loading = false;
+                    }
+                }
+            };
+        }
+    </script>
+</body>
+</html>

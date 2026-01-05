@@ -60,13 +60,34 @@ logger = structlog.get_logger()
 
 
 class CredentialsMiddleware(BaseHTTPMiddleware):
-    """HTTP 헤더에서 사용자 인증 정보를 추출하는 미들웨어 (PlayMCP용)"""
+    """HTTP 헤더에서 사용자 인증 정보를 추출하는 미들웨어 (PlayMCP/MCP용)"""
 
     async def dispatch(self, request: Request, call_next):
         # MCP 관련 엔드포인트에서만 인증 정보 추출
         if request.url.path in ["/mcp", "/sse", "/messages"]:
-            credentials = extract_credentials_from_request(request)
-            set_user_credentials(credentials)
+            # 1. X-API-Key 헤더 확인 (MCP API 키 방식)
+            api_key = request.headers.get("X-API-Key")
+            if api_key:
+                from src.jwt_auth import get_user_settings_by_api_key
+                settings = await get_user_settings_by_api_key(api_key)
+                if settings:
+                    # DB에 저장된 사용자 설정으로 credentials 생성
+                    credentials = UserCredentials(
+                        naver_client_id=settings.naver_client_id,
+                        naver_client_secret=settings.naver_client_secret,
+                        naver_seller_id=settings.naver_seller_id,
+                        coupang_vendor_id=settings.coupang_vendor_id,
+                        coupang_access_key=settings.coupang_access_key,
+                        coupang_secret_key=settings.coupang_secret_key,
+                    )
+                    set_user_credentials(credentials)
+                    logger.info("MCP API 키로 인증 성공", user_id=settings.user_id)
+                else:
+                    logger.warning("유효하지 않은 MCP API 키")
+            else:
+                # 2. PlayMCP 방식: 개별 헤더에서 credentials 추출
+                credentials = extract_credentials_from_request(request)
+                set_user_credentials(credentials)
 
         response = await call_next(request)
         return response
@@ -927,6 +948,11 @@ server = ShopAutomationServer(settings)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await server.initialize()
+
+    # JWT 인증 모듈에 DB 설정
+    from src.jwt_auth import set_database
+    set_database(server.db)
+
     yield
     await server.cleanup()
 
@@ -995,6 +1021,16 @@ async def setup_wizard():
     if os.path.exists(setup_path):
         return FileResponse(setup_path)
     return {"error": "Setup page not found"}
+
+
+# 로그인 페이지
+@app.get("/login")
+async def login_page():
+    """로그인 페이지"""
+    login_path = os.path.join(static_path, "login.html")
+    if os.path.exists(login_path):
+        return FileResponse(login_path)
+    return {"error": "Login page not found"}
 
 # SSE 엔드포인트 (기존 방식)
 @app.get("/sse")

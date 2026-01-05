@@ -1,12 +1,25 @@
 """
 인증 관리 API
-API 키 생성, 관리
+JWT 인증, 회원가입, 로그인, API 키 관리
 """
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
+from datetime import datetime
 
 from ..security import AuthManager
+from ..jwt_auth import (
+    authenticate_user,
+    create_user,
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    get_current_user,
+    get_current_active_user,
+    CurrentUser,
+    get_db
+)
+from ..database import User
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -67,8 +80,266 @@ async def list_api_keys():
 async def revoke_api_key(name: str):
     """API 키 폐기"""
     success = AuthManager.revoke_api_key(name)
-    
+
     if not success:
         raise HTTPException(status_code=404, detail="API 키를 찾을 수 없습니다")
-    
+
     return {"success": True, "message": f"API 키 '{name}'가 폐기되었습니다"}
+
+
+# ============================================
+# JWT 사용자 인증
+# ============================================
+
+class SignupRequest(BaseModel):
+    """회원가입 요청"""
+    email: EmailStr
+    password: str = Field(min_length=6, description="최소 6자 이상")
+    name: str = Field(min_length=1, max_length=100)
+
+
+class LoginRequest(BaseModel):
+    """로그인 요청"""
+    email: EmailStr
+    password: str
+
+
+class TokenResponse(BaseModel):
+    """토큰 응답"""
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class RefreshRequest(BaseModel):
+    """토큰 갱신 요청"""
+    refresh_token: str
+
+
+class UserResponse(BaseModel):
+    """사용자 정보 응답"""
+    id: int
+    email: str
+    name: str
+    is_active: bool
+    is_admin: bool
+
+
+@router.post("/signup", response_model=TokenResponse)
+async def signup(request: SignupRequest):
+    """회원가입"""
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    async with db.async_session() as session:
+        try:
+            user = await create_user(
+                session=session,
+                email=request.email,
+                password=request.password,
+                name=request.name
+            )
+
+            # 토큰 생성
+            access_token = create_access_token(data={"sub": user.id})
+            refresh_token = create_refresh_token(data={"sub": user.id})
+
+            from ..config import get_settings
+            settings = get_settings()
+
+            return TokenResponse(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                expires_in=settings.jwt_access_token_expire_minutes * 60
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/login", response_model=TokenResponse)
+async def login(request: LoginRequest):
+    """로그인"""
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    async with db.async_session() as session:
+        user = await authenticate_user(
+            session=session,
+            email=request.email,
+            password=request.password
+        )
+
+        if user is None:
+            raise HTTPException(
+                status_code=401,
+                detail="이메일 또는 비밀번호가 올바르지 않습니다"
+            )
+
+        # 마지막 로그인 시간 업데이트
+        user.last_login_at = datetime.utcnow()
+        await session.commit()
+
+        # 토큰 생성
+        access_token = create_access_token(data={"sub": user.id})
+        refresh_token = create_refresh_token(data={"sub": user.id})
+
+        from ..config import get_settings
+        settings = get_settings()
+
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=settings.jwt_access_token_expire_minutes * 60
+        )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(request: RefreshRequest):
+    """토큰 갱신"""
+    payload = decode_token(request.refresh_token)
+
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    # 새 토큰 생성
+    access_token = create_access_token(data={"sub": user_id})
+    refresh_token_new = create_refresh_token(data={"sub": user_id})
+
+    from ..config import get_settings
+    settings = get_settings()
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token_new,
+        expires_in=settings.jwt_access_token_expire_minutes * 60
+    )
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_me(current_user: CurrentUser = Depends(get_current_active_user)):
+    """현재 로그인된 사용자 정보"""
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        name=current_user.name,
+        is_active=current_user.is_active,
+        is_admin=current_user.is_admin
+    )
+
+
+@router.post("/logout")
+async def logout(current_user: CurrentUser = Depends(get_current_active_user)):
+    """로그아웃 (클라이언트에서 토큰 삭제)"""
+    return {"success": True, "message": "로그아웃되었습니다"}
+
+
+# ============================================
+# MCP API 키 관리
+# ============================================
+
+class McpApiKeyResponse(BaseModel):
+    """MCP API 키 응답"""
+    api_key: Optional[str] = None
+    created_at: Optional[str] = None
+    has_key: bool = False
+
+
+@router.get("/mcp-api-key", response_model=McpApiKeyResponse)
+async def get_mcp_api_key(current_user: CurrentUser = Depends(get_current_active_user)):
+    """MCP API 키 조회 (마스킹된 키 반환)"""
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    from sqlalchemy import select
+    from ..database import UserSettings
+
+    async with db.async_session() as session:
+        result = await session.execute(
+            select(UserSettings).where(UserSettings.user_id == current_user.id)
+        )
+        settings = result.scalar_one_or_none()
+
+        if settings and settings.mcp_api_key:
+            # 키의 앞 8자리만 표시, 나머지는 마스킹
+            masked_key = settings.mcp_api_key[:8] + "*" * 24
+            return McpApiKeyResponse(
+                api_key=masked_key,
+                created_at=settings.mcp_api_key_created_at.isoformat() if settings.mcp_api_key_created_at else None,
+                has_key=True
+            )
+
+        return McpApiKeyResponse(has_key=False)
+
+
+@router.post("/mcp-api-key", response_model=McpApiKeyResponse)
+async def create_mcp_api_key(current_user: CurrentUser = Depends(get_current_active_user)):
+    """MCP API 키 발급 (기존 키가 있으면 재발급)"""
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    import secrets
+    from sqlalchemy import select
+    from ..database import UserSettings
+
+    async with db.async_session() as session:
+        result = await session.execute(
+            select(UserSettings).where(UserSettings.user_id == current_user.id)
+        )
+        settings = result.scalar_one_or_none()
+
+        if not settings:
+            # 설정이 없으면 생성
+            settings = UserSettings(user_id=current_user.id)
+            session.add(settings)
+
+        # 새 API 키 생성 (32바이트 = 64자 hex)
+        new_api_key = secrets.token_hex(32)
+        settings.mcp_api_key = new_api_key
+        settings.mcp_api_key_created_at = datetime.utcnow()
+
+        await session.commit()
+
+        return McpApiKeyResponse(
+            api_key=new_api_key,  # 발급 시에만 전체 키 반환
+            created_at=settings.mcp_api_key_created_at.isoformat(),
+            has_key=True
+        )
+
+
+@router.delete("/mcp-api-key")
+async def delete_mcp_api_key(current_user: CurrentUser = Depends(get_current_active_user)):
+    """MCP API 키 삭제"""
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    from sqlalchemy import select
+    from ..database import UserSettings
+
+    async with db.async_session() as session:
+        result = await session.execute(
+            select(UserSettings).where(UserSettings.user_id == current_user.id)
+        )
+        settings = result.scalar_one_or_none()
+
+        if settings and settings.mcp_api_key:
+            settings.mcp_api_key = None
+            settings.mcp_api_key_created_at = None
+            await session.commit()
+            return {"success": True, "message": "MCP API 키가 삭제되었습니다"}
+
+        return {"success": False, "message": "삭제할 API 키가 없습니다"}

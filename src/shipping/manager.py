@@ -69,11 +69,63 @@ class ShippingManager:
                     customer_id=self.settings.cj_customer_id,
                     api_key=self.settings.cj_api_key,
                     contract_code=self.settings.cj_contract_code,
-                    test_mode=not self.settings.cj_api_key  # API 키 없으면 테스트 모드
+                    test_mode=not self.settings.cj_api_key
                 )
                 self.logger.info("CJ대한통운 클라이언트 초기화 완료")
             except Exception as e:
                 self.logger.error("CJ대한통운 클라이언트 초기화 실패", error=str(e))
+
+        # 한진택배 클라이언트 초기화
+        if self.settings.hanjin_configured:
+            try:
+                from .carriers.hanjin import HanjinClient
+                self._carriers[CarrierType.HANJIN] = HanjinClient(
+                    customer_id=self.settings.hanjin_customer_id,
+                    api_key=self.settings.hanjin_api_key,
+                    test_mode=not self.settings.hanjin_api_key
+                )
+                self.logger.info("한진택배 클라이언트 초기화 완료")
+            except Exception as e:
+                self.logger.error("한진택배 클라이언트 초기화 실패", error=str(e))
+
+        # 롯데택배 클라이언트 초기화
+        if self.settings.lotte_configured:
+            try:
+                from .carriers.lotte import LotteClient
+                self._carriers[CarrierType.LOTTE] = LotteClient(
+                    customer_id=self.settings.lotte_customer_id,
+                    api_key=self.settings.lotte_api_key,
+                    test_mode=not self.settings.lotte_api_key
+                )
+                self.logger.info("롯데택배 클라이언트 초기화 완료")
+            except Exception as e:
+                self.logger.error("롯데택배 클라이언트 초기화 실패", error=str(e))
+
+        # 로젠택배 클라이언트 초기화
+        if self.settings.logen_configured:
+            try:
+                from .carriers.logen import LogenClient
+                self._carriers[CarrierType.LOGEN] = LogenClient(
+                    customer_id=self.settings.logen_customer_id,
+                    api_key=self.settings.logen_api_key,
+                    test_mode=not self.settings.logen_api_key
+                )
+                self.logger.info("로젠택배 클라이언트 초기화 완료")
+            except Exception as e:
+                self.logger.error("로젠택배 클라이언트 초기화 실패", error=str(e))
+
+        # 우체국택배 클라이언트 초기화
+        if self.settings.epost_configured:
+            try:
+                from .carriers.epost import EpostClient
+                self._carriers[CarrierType.EPOST] = EpostClient(
+                    customer_id=self.settings.epost_customer_id,
+                    api_key=self.settings.epost_api_key,
+                    test_mode=not self.settings.epost_api_key
+                )
+                self.logger.info("우체국택배 클라이언트 초기화 완료")
+            except Exception as e:
+                self.logger.error("우체국택배 클라이언트 초기화 실패", error=str(e))
 
     @property
     def sender_info(self) -> Optional[SenderInfo]:
@@ -331,11 +383,39 @@ def create_shipping_manager_from_credentials(
     manager = ShippingManager(settings)
 
     # 사용자 credentials로 클라이언트 재설정
-    if credentials.cj_configured:
+    if getattr(credentials, 'cj_configured', False):
         from .carriers.cj import CJLogisticsClient
         manager.set_carrier(
             CarrierType.CJ,
             CJLogisticsClient.from_credentials(credentials)
+        )
+
+    if getattr(credentials, 'hanjin_configured', False):
+        from .carriers.hanjin import HanjinClient
+        manager.set_carrier(
+            CarrierType.HANJIN,
+            HanjinClient.from_credentials(credentials)
+        )
+
+    if getattr(credentials, 'lotte_configured', False):
+        from .carriers.lotte import LotteClient
+        manager.set_carrier(
+            CarrierType.LOTTE,
+            LotteClient.from_credentials(credentials)
+        )
+
+    if getattr(credentials, 'logen_configured', False):
+        from .carriers.logen import LogenClient
+        manager.set_carrier(
+            CarrierType.LOGEN,
+            LogenClient.from_credentials(credentials)
+        )
+
+    if getattr(credentials, 'epost_configured', False):
+        from .carriers.epost import EpostClient
+        manager.set_carrier(
+            CarrierType.EPOST,
+            EpostClient.from_credentials(credentials)
         )
 
     # 발송인 정보 설정

@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     mcp_host: str = Field(default="0.0.0.0")
     mcp_port: int = Field(default=8080)
     debug: bool = Field(default=False)
+
+    # JWT 인증
+    jwt_secret_key: str = Field(default="change-this-secret-key-in-production")
+    jwt_algorithm: str = Field(default="HS256")
+    jwt_access_token_expire_minutes: int = Field(default=60)
+    jwt_refresh_token_expire_days: int = Field(default=7)
     
     # 데이터베이스
     database_url: str = Field(default="sqlite+aiosqlite:///./data/shop.db")

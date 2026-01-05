@@ -69,15 +69,92 @@ class StockChangeReason(str, enum.Enum):
 
 
 # ============================================
+# 사용자 모델
+# ============================================
+
+class User(Base):
+    """사용자 모델"""
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(100))
+
+    # 상태
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # 시간
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # 관계
+    settings: Mapped[Optional["UserSettings"]] = relationship(back_populates="user", uselist=False)
+    products: Mapped[list["Product"]] = relationship(back_populates="user")
+    orders: Mapped[list["Order"]] = relationship(back_populates="user")
+
+
+class UserSettings(Base):
+    """사용자별 설정"""
+    __tablename__ = "user_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+
+    # 네이버 스마트스토어
+    naver_client_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    naver_client_secret: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    naver_seller_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # 쿠팡
+    coupang_vendor_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    coupang_access_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    coupang_secret_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # 발송인 정보
+    sender_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    sender_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    sender_zipcode: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    sender_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # 기본 택배사
+    default_carrier: Mapped[str] = mapped_column(String(20), default="cj")
+
+    # 택배사 API 설정 (JSON 형태로 저장)
+    carrier_settings: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # 텔레그램
+    telegram_bot_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    telegram_chat_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # 스케줄
+    schedule_first_batch: Mapped[str] = mapped_column(String(10), default="12:00")
+    schedule_second_batch: Mapped[str] = mapped_column(String(10), default="15:30")
+
+    # MCP API 키
+    mcp_api_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    mcp_api_key_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # 시간
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 관계
+    user: Mapped["User"] = relationship(back_populates="settings")
+
+
+# ============================================
 # 모델 정의
 # ============================================
 
 class Product(Base):
     """상품 모델"""
     __tablename__ = "products"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    sku: Mapped[str] = mapped_column(String(100), unique=True, index=True)  # 내부 SKU
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    sku: Mapped[str] = mapped_column(String(100), index=True)  # 내부 SKU (user별 unique)
     name: Mapped[str] = mapped_column(String(500))
     
     # 채널별 상품 ID
@@ -99,6 +176,7 @@ class Product(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # 관계
+    user: Mapped["User"] = relationship(back_populates="products")
     stock_history: Mapped[list["StockHistory"]] = relationship(back_populates="product")
     order_items: Mapped[list["OrderItem"]] = relationship(back_populates="product")
 
@@ -106,9 +184,10 @@ class Product(Base):
 class Order(Base):
     """주문 모델"""
     __tablename__ = "orders"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+
     # 채널 정보
     channel: Mapped[ChannelType] = mapped_column(SQLEnum(ChannelType))
     channel_order_id: Mapped[str] = mapped_column(String(100), index=True)  # 채널의 주문 ID
@@ -152,6 +231,7 @@ class Order(Base):
     batch_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # YYYY-MM-DD
     
     # 관계
+    user: Mapped["User"] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     claims: Mapped[list["Claim"]] = relationship(back_populates="order")
     delivery_tracking: Mapped[list["DeliveryTracking"]] = relationship(back_populates="order")
