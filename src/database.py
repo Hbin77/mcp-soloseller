@@ -144,6 +144,18 @@ class UserSettings(Base):
     user: Mapped["User"] = relationship(back_populates="settings")
 
 
+class EmailVerification(Base):
+    """이메일 인증 코드"""
+    __tablename__ = "email_verifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 6자리 인증 코드
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 # ============================================
 # 모델 정의
 # ============================================

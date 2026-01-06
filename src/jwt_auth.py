@@ -17,8 +17,12 @@ from .database import User, UserSettings, Database
 
 logger = structlog.get_logger()
 
-# 비밀번호 해싱
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# 비밀번호 해싱 (bcrypt 72바이트 제한 - truncate_error=False로 자동 처리)
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+    bcrypt__truncate_error=False
+)
 
 # Bearer 토큰 스키마
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -162,7 +166,8 @@ async def get_current_user(
     exact_exempt = ["/", "/docs", "/redoc", "/openapi.json", "/health", "/login", "/setup"]
     prefix_exempt = [
         "/static/", "/api/v1/auth/login", "/api/v1/auth/signup",
-        "/api/v1/auth/refresh", "/api/v1/auth/status"
+        "/api/v1/auth/refresh", "/api/v1/auth/status",
+        "/api/v1/auth/send-verification", "/api/v1/auth/recaptcha-config"
     ]
 
     path = request.url.path

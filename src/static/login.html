@@ -6,6 +6,7 @@
     <title>로그인 - 쇼핑몰 자동화 MCP</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
     <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
     <style>
         [x-cloak] { display: none !important; }
@@ -24,12 +25,12 @@
 
         <!-- 탭 네비게이션 -->
         <div class="bg-white/10 rounded-t-2xl p-1 flex">
-            <button @click="mode = 'login'"
+            <button @click="mode = 'login'; step = 1"
                     class="flex-1 py-3 px-4 rounded-xl text-sm font-medium transition"
                     :class="mode === 'login' ? 'bg-white text-gray-900 shadow' : 'text-white hover:bg-white/10'">
                 로그인
             </button>
-            <button @click="mode = 'signup'"
+            <button @click="mode = 'signup'; step = 1"
                     class="flex-1 py-3 px-4 rounded-xl text-sm font-medium transition"
                     :class="mode === 'signup' ? 'bg-white text-gray-900 shadow' : 'text-white hover:bg-white/10'">
                 회원가입
@@ -76,26 +77,27 @@
                         </button>
                     </div>
                 </div>
-                <button type="submit" :disabled="loading"
+
+                <!-- reCAPTCHA (로그인) -->
+                <div x-show="recaptchaSiteKey" class="flex justify-center">
+                    <div class="g-recaptcha" :data-sitekey="recaptchaSiteKey" data-callback="onRecaptchaLogin"></div>
+                </div>
+
+                <button type="submit" :disabled="loading || (recaptchaSiteKey && !recaptchaTokenLogin)"
                         class="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
                     <i x-show="loading" class="ri-loader-4-line animate-spin"></i>
                     <span x-text="loading ? '로그인 중...' : '로그인'"></span>
                 </button>
             </form>
 
-            <!-- 회원가입 폼 -->
-            <form x-show="mode === 'signup'" x-cloak @submit.prevent="signup()" class="space-y-6">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">이름</label>
-                    <div class="relative">
-                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <i class="ri-user-line text-gray-400"></i>
-                        </div>
-                        <input type="text" x-model="signupForm.name" required
-                               class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                               placeholder="홍길동">
-                    </div>
+            <!-- 회원가입 폼 - Step 1: 이메일 인증 -->
+            <form x-show="mode === 'signup' && step === 1" x-cloak @submit.prevent="sendVerificationCode()" class="space-y-6">
+                <div class="text-center mb-4">
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                        Step 1/2: 이메일 인증
+                    </span>
                 </div>
+
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">이메일</label>
                     <div class="relative">
@@ -107,6 +109,65 @@
                                placeholder="your@email.com">
                     </div>
                 </div>
+
+                <!-- reCAPTCHA (회원가입) -->
+                <div x-show="recaptchaSiteKey" class="flex justify-center">
+                    <div class="g-recaptcha" :data-sitekey="recaptchaSiteKey" data-callback="onRecaptchaSignup"></div>
+                </div>
+
+                <button type="submit" :disabled="loading || (recaptchaSiteKey && !recaptchaTokenSignup)"
+                        class="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                    <i x-show="loading" class="ri-loader-4-line animate-spin"></i>
+                    <span x-text="loading ? '전송 중...' : '인증코드 전송'"></span>
+                </button>
+            </form>
+
+            <!-- 회원가입 폼 - Step 2: 정보 입력 -->
+            <form x-show="mode === 'signup' && step === 2" x-cloak @submit.prevent="signup()" class="space-y-6">
+                <div class="text-center mb-4">
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                        Step 2/2: 정보 입력
+                    </span>
+                </div>
+
+                <!-- 이메일 (읽기 전용) -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">이메일 (인증됨)</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="ri-mail-check-line text-green-500"></i>
+                        </div>
+                        <input type="email" :value="signupForm.email" readonly
+                               class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg bg-gray-50 text-gray-500">
+                    </div>
+                </div>
+
+                <!-- 인증코드 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">인증코드</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="ri-key-line text-gray-400"></i>
+                        </div>
+                        <input type="text" x-model="signupForm.verificationCode" required maxlength="6"
+                               class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 tracking-widest text-center font-mono text-lg"
+                               placeholder="000000">
+                    </div>
+                    <p class="mt-1 text-sm text-gray-500">이메일로 전송된 6자리 코드를 입력하세요</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">이름</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="ri-user-line text-gray-400"></i>
+                        </div>
+                        <input type="text" x-model="signupForm.name" required
+                               class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="홍길동">
+                    </div>
+                </div>
+
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">비밀번호</label>
                     <div class="relative">
@@ -122,6 +183,7 @@
                         </button>
                     </div>
                 </div>
+
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">비밀번호 확인</label>
                     <div class="relative">
@@ -133,11 +195,18 @@
                                placeholder="비밀번호 재입력">
                     </div>
                 </div>
-                <button type="submit" :disabled="loading"
-                        class="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                    <i x-show="loading" class="ri-loader-4-line animate-spin"></i>
-                    <span x-text="loading ? '가입 중...' : '회원가입'"></span>
-                </button>
+
+                <div class="flex gap-3">
+                    <button type="button" @click="step = 1"
+                            class="flex-1 py-3 px-4 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium rounded-lg transition">
+                        이전
+                    </button>
+                    <button type="submit" :disabled="loading"
+                            class="flex-1 py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                        <i x-show="loading" class="ri-loader-4-line animate-spin"></i>
+                        <span x-text="loading ? '가입 중...' : '회원가입'"></span>
+                    </button>
+                </div>
             </form>
         </div>
 
@@ -148,13 +217,28 @@
     </div>
 
     <script>
+        // reCAPTCHA 콜백 (전역)
+        let recaptchaLoginCallback = null;
+        let recaptchaSignupCallback = null;
+
+        function onRecaptchaLogin(token) {
+            if (recaptchaLoginCallback) recaptchaLoginCallback(token);
+        }
+        function onRecaptchaSignup(token) {
+            if (recaptchaSignupCallback) recaptchaSignupCallback(token);
+        }
+
         function authApp() {
             return {
                 mode: 'login',
+                step: 1,
                 loading: false,
                 error: '',
                 success: '',
                 showPassword: false,
+                recaptchaSiteKey: '',
+                recaptchaTokenLogin: '',
+                recaptchaTokenSignup: '',
                 loginForm: {
                     email: '',
                     password: ''
@@ -163,10 +247,26 @@
                     name: '',
                     email: '',
                     password: '',
-                    confirmPassword: ''
+                    confirmPassword: '',
+                    verificationCode: ''
                 },
 
-                init() {
+                async init() {
+                    // reCAPTCHA 콜백 설정
+                    recaptchaLoginCallback = (token) => { this.recaptchaTokenLogin = token; };
+                    recaptchaSignupCallback = (token) => { this.recaptchaTokenSignup = token; };
+
+                    // reCAPTCHA 설정 가져오기
+                    try {
+                        const res = await fetch('/api/v1/auth/recaptcha-config');
+                        if (res.ok) {
+                            const data = await res.json();
+                            this.recaptchaSiteKey = data.site_key || '';
+                        }
+                    } catch (e) {
+                        console.log('reCAPTCHA not configured');
+                    }
+
                     // 이미 로그인되어 있으면 메인 페이지로 이동
                     const token = localStorage.getItem('accessToken');
                     if (token) {
@@ -199,12 +299,19 @@
                     this.loading = true;
 
                     try {
+                        const body = {
+                            ...this.loginForm
+                        };
+                        if (this.recaptchaTokenLogin) {
+                            body.recaptcha_token = this.recaptchaTokenLogin;
+                        }
+
                         const response = await fetch('/api/v1/auth/login', {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json'
                             },
-                            body: JSON.stringify(this.loginForm)
+                            body: JSON.stringify(body)
                         });
 
                         const data = await response.json();
@@ -215,6 +322,52 @@
                             window.location.href = '/';
                         } else {
                             this.error = data.detail || '로그인에 실패했습니다.';
+                            // reCAPTCHA 리셋
+                            if (typeof grecaptcha !== 'undefined') {
+                                grecaptcha.reset();
+                            }
+                            this.recaptchaTokenLogin = '';
+                        }
+                    } catch (e) {
+                        this.error = '서버와 통신할 수 없습니다.';
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                async sendVerificationCode() {
+                    this.error = '';
+                    this.success = '';
+                    this.loading = true;
+
+                    try {
+                        const body = {
+                            email: this.signupForm.email
+                        };
+                        if (this.recaptchaTokenSignup) {
+                            body.recaptcha_token = this.recaptchaTokenSignup;
+                        }
+
+                        const response = await fetch('/api/v1/auth/send-verification', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(body)
+                        });
+
+                        const data = await response.json();
+
+                        if (response.ok) {
+                            this.success = '인증코드가 이메일로 전송되었습니다.';
+                            this.step = 2;
+                        } else {
+                            this.error = data.detail || '인증코드 전송에 실패했습니다.';
+                            // reCAPTCHA 리셋
+                            if (typeof grecaptcha !== 'undefined') {
+                                grecaptcha.reset();
+                            }
+                            this.recaptchaTokenSignup = '';
                         }
                     } catch (e) {
                         this.error = '서버와 통신할 수 없습니다.';
@@ -248,7 +401,8 @@
                             body: JSON.stringify({
                                 name: this.signupForm.name,
                                 email: this.signupForm.email,
-                                password: this.signupForm.password
+                                password: this.signupForm.password,
+                                verification_code: this.signupForm.verificationCode
                             })
                         });
 

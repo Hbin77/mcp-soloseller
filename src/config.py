@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     # 재고
     stock_alert_threshold: int = Field(default=5)
     
+    # Google reCAPTCHA
+    recaptcha_site_key: Optional[str] = None
+    recaptcha_secret_key: Optional[str] = None
+
     # 기타
     timezone: str = Field(default="Asia/Seoul")
     
@@ -143,6 +147,16 @@ class Settings(BaseSettings):
     def epost_configured(self) -> bool:
         """우체국택배 설정 여부"""
         return all([self.epost_customer_id, self.epost_api_key])
+
+    @property
+    def recaptcha_configured(self) -> bool:
+        """reCAPTCHA 설정 여부"""
+        return all([self.recaptcha_site_key, self.recaptcha_secret_key])
+
+    @property
+    def smtp_configured(self) -> bool:
+        """SMTP 이메일 설정 여부"""
+        return all([self.smtp_host, self.smtp_user, self.smtp_password])
 
 
 @lru_cache
