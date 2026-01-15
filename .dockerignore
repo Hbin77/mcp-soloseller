@@ -2,6 +2,10 @@
 .git
 .gitignore
 
+# Backup & temp folders
+src_backup/
+etc/
+
 # Python
 __pycache__
 *.py[cod]

@@ -1,38 +1,22 @@
-version: '3.8'
+version: "3.8"
 
 services:
-  shop-mcp-server:
+  mcp-server:
     build: .
     container_name: shop-mcp-server
     restart: unless-stopped
-    
     ports:
-      - "8081:8080"
-    
-    volumes:
-      # 데이터 영속성 (SQLite DB)
-      - ./data:/app/data
-      # 로그 파일
-      - ./logs:/app/logs
-
+      - "8082:8082"
     environment:
       - TZ=Asia/Seoul
-      - PYTHONUNBUFFERED=1
-      # 기본값 설정 (PlayMCP 모드에서는 HTTP 헤더로 인증)
-      - MCP_HOST=0.0.0.0
-      - MCP_PORT=8080
-      - DATABASE_URL=sqlite+aiosqlite:///./data/shop.db
-    
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/')"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-    
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-
