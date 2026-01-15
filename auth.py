@@ -1,4 +1,4 @@
-"""다중 사용자 인증 모듈"""
+"""다중 사용자 인증 모듈 - 헤더 또는 토큰 기반"""
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Optional
@@ -163,5 +163,67 @@ AUTH_HEADERS_SPEC = {
         {"name": "X-Sender-Address", "description": "발송인 주소"},
         # 기본 설정
         {"name": "X-Default-Carrier", "description": "기본 택배사 (cj, hanjin, lotte, logen, epost)"},
+        # 토큰 인증 (권장)
+        {"name": "Authorization", "description": "Bearer 토큰 (웹에서 발급)"},
     ]
 }
+
+
+def credentials_from_db_row(row: dict) -> UserCredentials:
+    """데이터베이스 row를 UserCredentials로 변환"""
+    return UserCredentials(
+        naver_client_id=row.get("naver_client_id"),
+        naver_client_secret=row.get("naver_client_secret"),
+        naver_seller_id=row.get("naver_seller_id"),
+        coupang_vendor_id=row.get("coupang_vendor_id"),
+        coupang_access_key=row.get("coupang_access_key"),
+        coupang_secret_key=row.get("coupang_secret_key"),
+        cj_customer_id=row.get("cj_customer_id"),
+        cj_api_key=row.get("cj_api_key"),
+        hanjin_customer_id=row.get("hanjin_customer_id"),
+        hanjin_api_key=row.get("hanjin_api_key"),
+        lotte_customer_id=row.get("lotte_customer_id"),
+        lotte_api_key=row.get("lotte_api_key"),
+        logen_customer_id=row.get("logen_customer_id"),
+        logen_api_key=row.get("logen_api_key"),
+        epost_customer_id=row.get("epost_customer_id"),
+        epost_api_key=row.get("epost_api_key"),
+        sender_name=row.get("sender_name"),
+        sender_phone=row.get("sender_phone"),
+        sender_zipcode=row.get("sender_zipcode"),
+        sender_address=row.get("sender_address"),
+        default_carrier=row.get("default_carrier") or "cj"
+    )
+
+
+def extract_credentials_from_token(headers: dict) -> Optional[UserCredentials]:
+    """Authorization 헤더의 Bearer 토큰으로 credentials 조회"""
+    auth_header = headers.get("authorization") or headers.get("Authorization")
+    if not auth_header:
+        return None
+
+    if not auth_header.startswith("Bearer "):
+        return None
+
+    token = auth_header[7:]  # "Bearer " 제거
+
+    try:
+        from database import get_credentials_by_token
+        cred_row = get_credentials_by_token(token)
+        if cred_row:
+            return credentials_from_db_row(cred_row)
+    except Exception:
+        pass
+
+    return None
+
+
+def extract_credentials_auto(headers: dict) -> UserCredentials:
+    """토큰 또는 헤더에서 credentials 추출 (토큰 우선)"""
+    # 1. 토큰 기반 인증 시도
+    token_creds = extract_credentials_from_token(headers)
+    if token_creds:
+        return token_creds
+
+    # 2. 헤더 기반 인증 fallback
+    return extract_credentials_from_headers(headers)
