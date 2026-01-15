@@ -9,6 +9,17 @@ services:
       - "8082:8082"
     environment:
       - TZ=Asia/Seoul
+      # Naver SMTP
+      - SMTP_HOST=smtp.naver.com
+      - SMTP_PORT=587
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_FROM_NAME=SoloSeller
+      # Cloudflare Turnstile
+      - TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY}
+      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY}
+    volumes:
+      - ./data:/app/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/')"]
       interval: 30s

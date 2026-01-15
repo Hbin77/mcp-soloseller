@@ -1,6 +1,8 @@
 """HTTP 기반 MCP 서버 (다중 사용자 지원) + 웹 UI"""
 import json
 import secrets
+import os
+import httpx
 from typing import Any, Optional
 
 from fastapi import FastAPI, Request, Response, Form, Cookie
@@ -22,9 +24,16 @@ from tools.shipping import (
     get_available_carriers, get_channel_status
 )
 import database as db
+from email_service import send_verification_email
+
+# Cloudflare Turnstile 설정
+TURNSTILE_SITE_KEY = os.environ.get("TURNSTILE_SITE_KEY", "")
+TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
 
 # 세션 저장소 (메모리 - 프로덕션에서는 Redis 등 사용 권장)
 sessions: dict[str, int] = {}
+# 임시 회원가입 데이터 저장 (이메일 인증 전)
+pending_registrations: dict[str, dict] = {}
 
 
 def get_session_user(session_id: Optional[str]) -> Optional[int]:
@@ -39,6 +48,27 @@ def create_session(user_id: int) -> str:
     session_id = secrets.token_urlsafe(32)
     sessions[session_id] = user_id
     return session_id
+
+
+async def verify_turnstile(token: str) -> bool:
+    """Cloudflare Turnstile 검증"""
+    if not TURNSTILE_SECRET_KEY:
+        # 개발 환경에서는 Turnstile 비활성화
+        return True
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                data={
+                    "secret": TURNSTILE_SECRET_KEY,
+                    "response": token
+                }
+            )
+            result = response.json()
+            return result.get("success", False)
+    except Exception:
+        return False
 
 
 class CredentialsMiddleware(BaseHTTPMiddleware):
@@ -313,10 +343,21 @@ async def mcp_endpoint(request: Request):
 
 # ============ 웹 UI - 인증 ============
 
+def get_turnstile_widget() -> str:
+    """Turnstile 위젯 HTML 반환"""
+    if not TURNSTILE_SITE_KEY:
+        return ""
+    return f'''
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <div class="cf-turnstile" data-sitekey="{TURNSTILE_SITE_KEY}" data-theme="dark" style="margin-bottom: 16px;"></div>
+    '''
+
+
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(error: str = "", success: str = ""):
     msg = f'<div class="error">{error}</div>' if error else ""
     msg += f'<div class="success">{success}</div>' if success else ""
+    turnstile = get_turnstile_widget()
     content = f"""
     {msg}
     <div class="card">
@@ -327,6 +368,7 @@ async def register_page(error: str = "", success: str = ""):
             <input type="password" name="password" required placeholder="8자 이상">
             <label>비밀번호 확인</label>
             <input type="password" name="password2" required>
+            {turnstile}
             <button type="submit">회원가입</button>
         </form>
         <p style="margin-top: 20px;">이미 계정이 있나요? <a href="/login">로그인</a></p>
@@ -336,23 +378,112 @@ async def register_page(error: str = "", success: str = ""):
 
 
 @app.post("/register", response_class=HTMLResponse)
-async def register_submit(email: str = Form(...), password: str = Form(...), password2: str = Form(...)):
+async def register_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    password2: str = Form(...)
+):
+    # Turnstile 검증
+    form = await request.form()
+    turnstile_token = form.get("cf-turnstile-response", "")
+    if not await verify_turnstile(turnstile_token):
+        return RedirectResponse("/register?error=로봇 확인에 실패했습니다", status_code=303)
+
     if len(password) < 8:
-        return RedirectResponse(f"/register?error=비밀번호는 8자 이상이어야 합니다", status_code=303)
+        return RedirectResponse("/register?error=비밀번호는 8자 이상이어야 합니다", status_code=303)
     if password != password2:
-        return RedirectResponse(f"/register?error=비밀번호가 일치하지 않습니다", status_code=303)
+        return RedirectResponse("/register?error=비밀번호가 일치하지 않습니다", status_code=303)
 
-    user_id = db.create_user(email, password)
+    # 이미 등록된 이메일 확인
+    existing_user = db.get_user_by_email(email)
+    if existing_user:
+        return RedirectResponse("/register?error=이미 등록된 이메일입니다", status_code=303)
+
+    # 인증 코드 생성 및 이메일 발송
+    code = db.create_verification_code(email, "register")
+    if not send_verification_email(email, code):
+        return RedirectResponse("/register?error=인증 이메일 발송에 실패했습니다", status_code=303)
+
+    # 임시 저장 (이메일 인증 후 계정 생성)
+    reg_token = secrets.token_urlsafe(32)
+    pending_registrations[reg_token] = {"email": email, "password": password}
+
+    return RedirectResponse(f"/verify-email?token={reg_token}&email={email}", status_code=303)
+
+
+@app.get("/verify-email", response_class=HTMLResponse)
+async def verify_email_page(token: str = "", email: str = "", error: str = ""):
+    if not token or token not in pending_registrations:
+        return RedirectResponse("/register?error=유효하지 않은 요청입니다", status_code=303)
+
+    msg = f'<div class="error">{error}</div>' if error else ""
+    content = f"""
+    {msg}
+    <div class="card">
+        <p style="margin-bottom: 20px; color: #aaa;">
+            <strong>{email}</strong>으로 인증 코드를 발송했습니다.<br>
+            이메일을 확인하고 6자리 코드를 입력해주세요.
+        </p>
+        <form method="post">
+            <input type="hidden" name="token" value="{token}">
+            <input type="hidden" name="email" value="{email}">
+            <label>인증 코드</label>
+            <input type="text" name="code" required placeholder="000000" maxlength="6"
+                   style="font-size: 24px; letter-spacing: 8px; text-align: center;">
+            <button type="submit">인증 확인</button>
+        </form>
+        <p style="margin-top: 20px; font-size: 14px; color: #888;">
+            코드를 받지 못하셨나요? <a href="/resend-code?token={token}&email={email}">다시 보내기</a>
+        </p>
+    </div>
+    """
+    return HTMLResponse(render_page("이메일 인증", content))
+
+
+@app.post("/verify-email")
+async def verify_email_submit(
+    token: str = Form(...),
+    email: str = Form(...),
+    code: str = Form(...)
+):
+    if token not in pending_registrations:
+        return RedirectResponse("/register?error=유효하지 않은 요청입니다", status_code=303)
+
+    # 인증 코드 확인
+    if not db.verify_code(email, code, "register"):
+        return RedirectResponse(f"/verify-email?token={token}&email={email}&error=인증 코드가 올바르지 않습니다", status_code=303)
+
+    # 계정 생성
+    reg_data = pending_registrations.pop(token)
+    user_id = db.create_user(reg_data["email"], reg_data["password"])
+
     if not user_id:
-        return RedirectResponse(f"/register?error=이미 등록된 이메일입니다", status_code=303)
+        return RedirectResponse("/register?error=회원가입에 실패했습니다", status_code=303)
 
-    return RedirectResponse(f"/login?success=회원가입 완료! 로그인해주세요", status_code=303)
+    # 이메일 인증 완료 처리
+    db.mark_email_verified(email)
+
+    return RedirectResponse("/login?success=회원가입이 완료되었습니다! 로그인해주세요", status_code=303)
+
+
+@app.get("/resend-code")
+async def resend_code(token: str = "", email: str = ""):
+    if token not in pending_registrations:
+        return RedirectResponse("/register?error=유효하지 않은 요청입니다", status_code=303)
+
+    # 새 인증 코드 생성 및 발송
+    code = db.create_verification_code(email, "register")
+    send_verification_email(email, code)
+
+    return RedirectResponse(f"/verify-email?token={token}&email={email}", status_code=303)
 
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(error: str = "", success: str = ""):
     msg = f'<div class="error">{error}</div>' if error else ""
     msg += f'<div class="success">{success}</div>' if success else ""
+    turnstile = get_turnstile_widget()
     content = f"""
     {msg}
     <div class="card">
@@ -361,6 +492,7 @@ async def login_page(error: str = "", success: str = ""):
             <input type="email" name="email" required>
             <label>비밀번호</label>
             <input type="password" name="password" required>
+            {turnstile}
             <button type="submit">로그인</button>
         </form>
         <p style="margin-top: 20px;">계정이 없나요? <a href="/register">회원가입</a></p>
@@ -370,10 +502,24 @@ async def login_page(error: str = "", success: str = ""):
 
 
 @app.post("/login")
-async def login_submit(email: str = Form(...), password: str = Form(...)):
+async def login_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...)
+):
+    # Turnstile 검증
+    form = await request.form()
+    turnstile_token = form.get("cf-turnstile-response", "")
+    if not await verify_turnstile(turnstile_token):
+        return RedirectResponse("/login?error=로봇 확인에 실패했습니다", status_code=303)
+
     user_id = db.authenticate_user(email, password)
     if not user_id:
         return RedirectResponse("/login?error=이메일 또는 비밀번호가 잘못되었습니다", status_code=303)
+
+    # 이메일 인증 여부 확인
+    if not db.is_email_verified(email):
+        return RedirectResponse("/login?error=이메일 인증이 필요합니다", status_code=303)
 
     session_id = create_session(user_id)
     response = RedirectResponse("/settings", status_code=303)

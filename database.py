@@ -43,7 +43,21 @@ def init_database():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
+                email_verified INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 이메일 인증 코드 테이블
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS verification_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                code TEXT NOT NULL,
+                type TEXT DEFAULT 'register',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                used INTEGER DEFAULT 0
             )
         """)
 
@@ -281,6 +295,79 @@ def get_credentials_by_token(token: str) -> Optional[dict]:
     if not user_id:
         return None
     return get_user_credentials(user_id)
+
+
+# ============ 이메일 인증 ============
+
+def generate_verification_code() -> str:
+    """6자리 인증 코드 생성"""
+    import random
+    return ''.join([str(random.randint(0, 9)) for _ in range(6)])
+
+
+def create_verification_code(email: str, code_type: str = "register", expires_minutes: int = 10) -> str:
+    """인증 코드 생성 및 저장"""
+    code = generate_verification_code()
+    expires_at = datetime.now() + timedelta(minutes=expires_minutes)
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        # 기존 미사용 코드 무효화
+        cursor.execute(
+            "UPDATE verification_codes SET used = 1 WHERE email = ? AND type = ? AND used = 0",
+            (email, code_type)
+        )
+        # 새 코드 생성
+        cursor.execute(
+            "INSERT INTO verification_codes (email, code, type, expires_at) VALUES (?, ?, ?, ?)",
+            (email, code, code_type, expires_at)
+        )
+    return code
+
+
+def verify_code(email: str, code: str, code_type: str = "register") -> bool:
+    """인증 코드 확인"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id FROM verification_codes
+               WHERE email = ? AND code = ? AND type = ? AND used = 0
+               AND expires_at > CURRENT_TIMESTAMP""",
+            (email, code, code_type)
+        )
+        row = cursor.fetchone()
+
+        if row:
+            # 코드 사용 처리
+            cursor.execute("UPDATE verification_codes SET used = 1 WHERE id = ?", (row["id"],))
+            return True
+        return False
+
+
+def mark_email_verified(email: str) -> bool:
+    """이메일 인증 완료 처리"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET email_verified = 1 WHERE email = ?", (email,))
+        return cursor.rowcount > 0
+
+
+def is_email_verified(email: str) -> bool:
+    """이메일 인증 여부 확인"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT email_verified FROM users WHERE email = ?", (email,))
+        row = cursor.fetchone()
+        return bool(row and row["email_verified"])
+
+
+def get_user_by_email(email: str) -> Optional[dict]:
+    """이메일로 사용자 조회"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, email, email_verified, created_at FROM users WHERE email = ?", (email,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
 
 # 앱 시작 시 데이터베이스 초기화
