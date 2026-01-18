@@ -199,8 +199,24 @@ MCP_TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "orders": {"type": "array", "description": "주문 목록"},
-                "carrier": {"type": "string", "enum": ["cj", "hanjin", "lotte", "logen", "epost"]}
+                "orders": {
+                    "type": "array",
+                    "description": "주문 목록",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "order_id": {"type": "string", "description": "주문 ID"},
+                            "channel": {"type": "string", "enum": ["naver", "coupang"]},
+                            "receiver_name": {"type": "string", "description": "수령인명"},
+                            "receiver_phone": {"type": "string", "description": "수령인 연락처"},
+                            "receiver_address": {"type": "string", "description": "배송 주소"},
+                            "receiver_zipcode": {"type": "string", "description": "우편번호"},
+                            "product_name": {"type": "string", "description": "상품명"}
+                        },
+                        "required": ["order_id", "channel", "receiver_name", "receiver_phone", "receiver_address"]
+                    }
+                },
+                "carrier": {"type": "string", "enum": ["cj", "hanjin", "lotte", "logen", "epost"], "description": "택배사"}
             },
             "required": ["orders"]
         }
@@ -224,7 +240,22 @@ MCP_TOOLS = [
         "description": "여러 주문에 송장번호를 일괄 등록합니다",
         "inputSchema": {
             "type": "object",
-            "properties": {"registrations": {"type": "array"}},
+            "properties": {
+                "registrations": {
+                    "type": "array",
+                    "description": "등록할 송장 목록",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "order_id": {"type": "string", "description": "주문 ID"},
+                            "channel": {"type": "string", "enum": ["naver", "coupang"], "description": "채널"},
+                            "tracking_number": {"type": "string", "description": "송장번호"},
+                            "carrier": {"type": "string", "enum": ["cj", "hanjin", "lotte", "logen", "epost"], "description": "택배사"}
+                        },
+                        "required": ["order_id", "channel", "tracking_number"]
+                    }
+                }
+            },
             "required": ["registrations"]
         }
     },
