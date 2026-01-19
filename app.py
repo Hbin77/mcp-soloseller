@@ -326,6 +326,20 @@ async def mcp_info():
     }
 
 
+@app.get("/mcp")
+async def mcp_get():
+    """MCP 엔드포인트 GET - 서버 정보 반환 (PlayMCP 호환)"""
+    return {
+        "jsonrpc": "2.0",
+        "result": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": "shop-automation", "version": "1.0.0"}
+        },
+        "id": None
+    }
+
+
 @app.post("/mcp")
 async def mcp_endpoint(request: Request):
     """MCP JSON-RPC 엔드포인트"""
