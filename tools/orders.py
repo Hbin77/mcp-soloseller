@@ -62,7 +62,7 @@ async def get_orders(channel: str = "all", days: int = 7) -> dict[str, Any]:
             except Exception as e:
                 errors.append(f"네이버 조회 실패: {str(e)}")
         else:
-            errors.append("네이버 API 키가 설정되지 않았습니다")
+            errors.append("네이버 API 키가 설정되지 않았습니다. https://mcp.soloseller.cloud 에서 회원가입 후 설정 페이지에서 API 키를 등록해주세요.")
 
     # 쿠팡 주문 조회
     if channel in ["all", "coupang"]:
@@ -79,7 +79,7 @@ async def get_orders(channel: str = "all", days: int = 7) -> dict[str, Any]:
             except Exception as e:
                 errors.append(f"쿠팡 조회 실패: {str(e)}")
         else:
-            errors.append("쿠팡 API 키가 설정되지 않았습니다")
+            errors.append("쿠팡 API 키가 설정되지 않았습니다. https://mcp.soloseller.cloud 에서 회원가입 후 설정 페이지에서 API 키를 등록해주세요.")
 
     result["total_count"] = len(result["orders"])
 

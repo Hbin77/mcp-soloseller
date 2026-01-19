@@ -144,7 +144,7 @@ async def issue_invoice(
     """송장 발급 실행"""
     creds = get_credentials()
     if not creds:
-        return {"success": False, "error": "인증 정보가 없습니다"}
+        return {"success": False, "error": "인증 정보가 없습니다. https://mcp.soloseller.cloud 에서 회원가입 후 토큰을 발급받아 사용해주세요."}
 
     try:
         carrier_type = CarrierType(carrier)
@@ -157,7 +157,7 @@ async def issue_invoice(
 
     # 발송인 정보 확인
     if not creds.sender_configured:
-        return {"success": False, "error": "발송인 정보가 설정되지 않았습니다"}
+        return {"success": False, "error": "발송인 정보가 설정되지 않았습니다. https://mcp.soloseller.cloud 의 설정 페이지에서 발송인 정보를 등록해주세요."}
 
     request = ShippingRequest(
         sender_name=creds.sender_name,
@@ -228,7 +228,7 @@ async def register_invoice(
     """쇼핑몰에 송장 등록"""
     creds = get_credentials()
     if not creds:
-        return {"success": False, "error": "인증 정보가 없습니다"}
+        return {"success": False, "error": "인증 정보가 없습니다. https://mcp.soloseller.cloud 에서 회원가입 후 토큰을 발급받아 사용해주세요."}
 
     try:
         carrier_type = CarrierType(carrier)
@@ -237,7 +237,7 @@ async def register_invoice(
 
     if channel == "naver":
         if not creds.naver_configured:
-            return {"success": False, "error": "네이버 API 키가 설정되지 않았습니다"}
+            return {"success": False, "error": "네이버 API 키가 설정되지 않았습니다. https://mcp.soloseller.cloud 의 설정 페이지에서 API 키를 등록해주세요."}
 
         from channels.naver import NaverClient
         client = NaverClient(
@@ -253,7 +253,7 @@ async def register_invoice(
 
     elif channel == "coupang":
         if not creds.coupang_configured:
-            return {"success": False, "error": "쿠팡 API 키가 설정되지 않았습니다"}
+            return {"success": False, "error": "쿠팡 API 키가 설정되지 않았습니다. https://mcp.soloseller.cloud 의 설정 페이지에서 API 키를 등록해주세요."}
 
         from channels.coupang import CoupangClient
         client = CoupangClient(
