@@ -54,10 +54,15 @@ async def verify_turnstile(token: str) -> bool:
     """Cloudflare Turnstile 검증"""
     if not TURNSTILE_SECRET_KEY:
         # 개발 환경에서는 Turnstile 비활성화
+        print("[TURNSTILE] SECRET_KEY 없음 - 검증 건너뜀")
         return True
 
+    if not token:
+        print("[TURNSTILE] 토큰 없음")
+        return False
+
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
                 "https://challenges.cloudflare.com/turnstile/v0/siteverify",
                 data={
@@ -66,8 +71,13 @@ async def verify_turnstile(token: str) -> bool:
                 }
             )
             result = response.json()
-            return result.get("success", False)
-    except Exception:
+            success = result.get("success", False)
+            print(f"[TURNSTILE] 응답: {result}")
+            if not success:
+                print(f"[TURNSTILE] 실패 원인: {result.get('error-codes', [])}")
+            return success
+    except Exception as e:
+        print(f"[TURNSTILE] 예외 발생: {e}")
         return False
 
 
