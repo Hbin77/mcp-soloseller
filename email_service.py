@@ -1,11 +1,11 @@
-"""이메일 발송 모듈 - Naver SMTP"""
+"""이메일 발송 모듈 - Gmail SMTP"""
 import smtplib
 import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 # 환경 변수에서 설정 로드
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.naver.com")
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
