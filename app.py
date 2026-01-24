@@ -89,7 +89,7 @@ app = FastAPI(
 )
 
 # CORS 허용 도메인 설정
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://mcp.soloseller.cloud").split(",")
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://soloseller.cloud").split(",")
 
 app.add_middleware(
     CORSMiddleware,
