@@ -32,7 +32,7 @@ class ChannelOrder:
     shipping_fee: float = 0.0
     buyer_memo: Optional[str] = None
     ordered_at: Optional[datetime] = None
-    items: List[ChannelOrderItem] = None
+    items: Optional[List[ChannelOrderItem]] = None
 
     def __post_init__(self):
         if self.items is None:

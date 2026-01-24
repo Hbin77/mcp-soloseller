@@ -4,6 +4,7 @@ import hashlib
 import secrets
 import json
 import os
+import bcrypt
 from datetime import datetime, timedelta
 from typing import Optional
 from dataclasses import dataclass
@@ -119,8 +120,17 @@ def init_database():
 
 
 def hash_password(password: str) -> str:
-    """비밀번호 해싱"""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """비밀번호 해싱 (bcrypt)"""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    """비밀번호 검증"""
+    # bcrypt 해시인지 확인 (bcrypt 해시는 $2로 시작)
+    if hashed.startswith('$2'):
+        return bcrypt.checkpw(password.encode(), hashed.encode())
+    # 레거시 SHA256 해시 지원 (마이그레이션용)
+    return hashlib.sha256(password.encode()).hexdigest() == hashed
 
 
 def generate_token() -> str:
@@ -156,11 +166,19 @@ def authenticate_user(email: str, password: str) -> Optional[int]:
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id FROM users WHERE email = ? AND password_hash = ?",
-            (email, hash_password(password))
+            "SELECT id, password_hash FROM users WHERE email = ?",
+            (email,)
         )
         row = cursor.fetchone()
-        return row["id"] if row else None
+        if row and verify_password(password, row["password_hash"]):
+            # 레거시 SHA256 해시를 bcrypt로 업그레이드
+            if not row["password_hash"].startswith('$2'):
+                cursor.execute(
+                    "UPDATE users SET password_hash = ? WHERE id = ?",
+                    (hash_password(password), row["id"])
+                )
+            return row["id"]
+        return None
 
 
 def get_user_by_id(user_id: int) -> Optional[dict]:

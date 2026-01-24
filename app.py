@@ -88,12 +88,15 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# CORS 허용 도메인 설정
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://mcp.soloseller.cloud").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 app.add_middleware(CredentialsMiddleware)
 
