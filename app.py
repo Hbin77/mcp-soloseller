@@ -6,8 +6,9 @@ import httpx
 from typing import Any, Optional
 
 from fastapi import FastAPI, Request, Response, Form, Cookie
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from auth import (
@@ -110,8 +111,21 @@ app.add_middleware(
 )
 app.add_middleware(CredentialsMiddleware)
 
+# 정적 파일 서빙
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 
 # ============ HTML 템플릿 ============
+
+OG_TAGS = """
+<meta property="og:title" content="SoloSeller - 쇼핑몰 자동화 MCP">
+<meta property="og:description" content="네이버 스마트스토어와 쿠팡 판매자를 위한 주문 관리 자동화 MCP 서버">
+<meta property="og:image" content="https://soloseller.cloud/static/logo.png">
+<meta property="og:url" content="https://soloseller.cloud">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="/static/logo.png">
+"""
 
 BASE_STYLE = """
 <style>
@@ -169,8 +183,14 @@ def render_page(title: str, content: str, user_id: Optional[int] = None) -> str:
     return f"""
     <!DOCTYPE html>
     <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{title} - SoloSeller MCP</title>{BASE_STYLE}</head>
-    <body><div class="container">{nav}<h1>{title}</h1>{content}</div></body></html>
+    <title>{title} - SoloSeller MCP</title>
+    {OG_TAGS}
+    {BASE_STYLE}</head>
+    <body><div class="container">{nav}
+    <div style="text-align: center; margin-bottom: 20px;">
+        <img src="/static/logo.png" alt="SoloSeller" style="height: 60px;">
+    </div>
+    <h1 style="text-align: center;">{title}</h1>{content}</div></body></html>
     """
 
 
