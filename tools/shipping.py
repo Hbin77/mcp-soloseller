@@ -27,9 +27,11 @@ async def issue_invoice(
 
     cache_key = creds.cj_customer_id or ""
     if cache_key not in _cj_clients:
+        has_real_creds = bool(creds.cj_customer_id and creds.cj_biz_reg_num)
         _cj_clients[cache_key] = CJClient(
             customer_id=creds.cj_customer_id or "",
             biz_reg_num=creds.cj_biz_reg_num or "",
+            test_mode=not has_real_creds,
         )
     client = _cj_clients[cache_key]
 
@@ -90,7 +92,7 @@ async def register_invoice(
     }
 
 
-async def process_orders(days: int = 7) -> dict[str, Any]:
+async def process_orders(days: int = 7, dry_run: bool = False) -> dict[str, Any]:
     """주문 조회 → 송장 발급 → 쿠팡 등록을 한번에 처리합니다"""
     from tools.orders import get_orders
 
@@ -102,6 +104,27 @@ async def process_orders(days: int = 7) -> dict[str, Any]:
     orders = orders_result.get("orders", [])
     if not orders:
         return {"success": True, "message": "처리할 신규 주문이 없습니다.", "processed": 0}
+
+    # dry_run: 미리보기만 반환
+    if dry_run:
+        preview = []
+        for order in orders:
+            items = order.get("items", [])
+            product_summary = ", ".join(
+                item.get("product_name", "상품") for item in items
+            ) if items else "상품"
+            preview.append({
+                "order_id": order.get("order_id"),
+                "receiver_name": order.get("receiver_name"),
+                "product_summary": product_summary,
+            })
+        return {
+            "success": True,
+            "dry_run": True,
+            "message": f"{len(orders)}건의 주문이 처리 대기 중입니다.",
+            "total": len(orders),
+            "orders": preview,
+        }
 
     # 2. 각 주문에 대해 송장 발급 + 등록
     results = []

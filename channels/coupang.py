@@ -28,9 +28,7 @@ class CoupangClient:
         """HMAC-SHA256 서명 생성"""
         datetime_str = time.strftime("%y%m%dT%H%M%SZ", time.gmtime())
 
-        message = datetime_str + method + path
-        if query_string:
-            message += "?" + query_string
+        message = datetime_str + method + path + query_string
 
         signature = hmac.new(
             self.secret_key.encode('utf-8'),

@@ -137,30 +137,43 @@ async def main():
 
     # === 1단계: 주문 조회 ===
     orders = await step1_get_orders()
-    if not orders:
-        return
 
-    # === 2단계: 첫 번째 주문에 송장 발급 (테스트) ===
-    first_order = orders[0]
-    invoice_result = await step2_issue_invoice(first_order)
+    if orders:
+        # 실제 주문이 있으면 전체 플로우 진행
+        first_order = orders[0]
+        invoice_result = await step2_issue_invoice(first_order)
 
-    if not invoice_result.get("success"):
-        return
+        if not invoice_result.get("success"):
+            return
 
-    tracking = invoice_result.get("tracking_number", "")
+        tracking = invoice_result.get("tracking_number", "")
 
-    # 테스트 모드 송장이면 쿠팡 등록 건너뜀
-    if invoice_result.get("warning"):
-        print("\n⚠️  테스트 모드 송장이므로 쿠팡 등록을 건너뜁니다.")
-        print("   CJ API 키를 .env에 입력하면 실제 송장이 발급됩니다.")
-        return
+        if invoice_result.get("warning"):
+            print("\n⚠️  테스트 모드 송장이므로 쿠팡 등록을 건너뜁니다.")
+            return
 
-    # === 3단계: 쿠팡에 송장 등록 ===
-    await step3_register_invoice(first_order["order_id"], tracking)
+        await step3_register_invoice(first_order["order_id"], tracking)
 
-    print("\n" + "="*50)
-    print("🎉 전체 플로우 완료!")
-    print("="*50)
+        print("\n" + "="*50)
+        print("🎉 전체 플로우 완료!")
+        print("="*50)
+    else:
+        # 주문이 없으면 CJ 송장 발급만 단독 테스트
+        print("\n⚠️  조회된 주문이 없어 CJ 송장 발급 단독 테스트를 진행합니다.")
+        import secrets as _secrets
+        test_order = {
+            "order_id": f"TEST_{_secrets.randbelow(1000000):06d}",
+            "receiver_name": "테스트수신자",
+            "receiver_phone": "010-1234-5678",
+            "receiver_address": "서울특별시 강남구 테헤란로 123 테스트빌딩 301호",
+            "receiver_zipcode": "06234",
+            "items": [{"product_name": "테스트상품"}],
+        }
+        invoice_result = await step2_issue_invoice(test_order)
+        if invoice_result.get("success"):
+            print("\n" + "="*50)
+            print("🎉 CJ 송장 발급 테스트 완료!")
+            print("="*50)
 
 
 if __name__ == "__main__":

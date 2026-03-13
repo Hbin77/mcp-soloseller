@@ -29,6 +29,7 @@ def main():
 
 async def run_stdio():
     """stdio 모드 실행 (로컬 전용)"""
+    import os
     import json
     from typing import Any
 
@@ -36,8 +37,33 @@ async def run_stdio():
     from mcp.server.stdio import stdio_server
     from mcp.types import Tool, TextContent
 
+    from auth import UserCredentials, set_credentials
     from tools.orders import get_orders
     from tools.shipping import issue_invoice, register_invoice, process_orders
+    from tools.config import check_config
+
+    # .env에서 인증 정보 로드
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    os.environ.setdefault(key.strip(), value.strip())
+
+    creds = UserCredentials(
+        coupang_vendor_id=os.environ.get("COUPANG_VENDOR_ID"),
+        coupang_access_key=os.environ.get("COUPANG_ACCESS_KEY"),
+        coupang_secret_key=os.environ.get("COUPANG_SECRET_KEY"),
+        cj_customer_id=os.environ.get("CJ_CUSTOMER_ID"),
+        cj_biz_reg_num=os.environ.get("CJ_BIZ_REG_NUM"),
+        sender_name=os.environ.get("SENDER_NAME"),
+        sender_phone=os.environ.get("SENDER_PHONE"),
+        sender_zipcode=os.environ.get("SENDER_ZIPCODE"),
+        sender_address=os.environ.get("SENDER_ADDRESS"),
+    )
+    set_credentials(creds)
 
     server = Server("soloseller-mvp")
 
@@ -45,8 +71,13 @@ async def run_stdio():
     async def list_tools() -> list[Tool]:
         return [
             Tool(
+                name="check_config",
+                description="현재 설정 상태를 확인합니다. 어떤 기능이 사용 가능한지 점검할 때 사용하세요.",
+                inputSchema={"type": "object", "properties": {}}
+            ),
+            Tool(
                 name="get_orders",
-                description="쿠팡에서 신규 주문을 조회합니다",
+                description="쿠팡에서 신규 주문을 조회합니다. 주문 확인만 하고 싶을 때 사용하세요.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -56,7 +87,7 @@ async def run_stdio():
             ),
             Tool(
                 name="issue_invoice",
-                description="CJ대한통운 API로 송장을 발급합니다",
+                description="CJ대한통운으로 송장을 발급합니다. 개별 주문을 수동 처리할 때 사용하세요.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -72,7 +103,7 @@ async def run_stdio():
             ),
             Tool(
                 name="register_invoice",
-                description="쿠팡에 송장번호를 등록합니다",
+                description="쿠팡에 송장번호를 등록합니다. issue_invoice로 발급받은 송장을 쿠팡에 입력할 때 사용하세요.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -84,11 +115,12 @@ async def run_stdio():
             ),
             Tool(
                 name="process_orders",
-                description="쿠팡 주문 조회 → CJ 송장 발급 → 쿠팡 송장 등록을 한번에 자동 처리합니다",
+                description="주문 조회→송장 발급→쿠팡 등록을 한번에 처리합니다. dry_run=true로 미리보기 가능.",
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "days": {"type": "integer", "default": 7}
+                        "days": {"type": "integer", "default": 7},
+                        "dry_run": {"type": "boolean", "default": False, "description": "true면 미리보기만"}
                     }
                 }
             ),
@@ -97,7 +129,9 @@ async def run_stdio():
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         try:
-            if name == "get_orders":
+            if name == "check_config":
+                result = await check_config()
+            elif name == "get_orders":
                 result = await get_orders(days=arguments.get("days", 7))
             elif name == "issue_invoice":
                 result = await issue_invoice(
@@ -114,7 +148,10 @@ async def run_stdio():
                     tracking_number=arguments["tracking_number"]
                 )
             elif name == "process_orders":
-                result = await process_orders(days=arguments.get("days", 7))
+                result = await process_orders(
+                    days=arguments.get("days", 7),
+                    dry_run=arguments.get("dry_run", False)
+                )
             else:
                 result = {"error": f"Unknown tool: {name}"}
 

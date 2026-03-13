@@ -19,6 +19,10 @@ logger = structlog.get_logger()
 BASE_URL_TEST = "https://dxapi-dev.cjlogistics.com:5054"
 BASE_URL_PROD = "https://dxapi.cjlogistics.com:5052"
 
+# CJ DX API 게이트웨이 키 (Postman collection 제공 고정값)
+GATEWAY_KEY_TEST = "332d248e-ed7c-470c-8732-ccb223b93be8"
+GATEWAY_KEY_PROD = "2c9ec67c-4583-4cb6-84c5-93d3facea345"
+
 
 class CJClient:
     """CJ대한통운 DX API 클라이언트"""
@@ -33,6 +37,7 @@ class CJClient:
         self.biz_reg_num = biz_reg_num
         self.test_mode = test_mode
         self.base_url = BASE_URL_TEST if test_mode else BASE_URL_PROD
+        self.gateway_key = GATEWAY_KEY_TEST if test_mode else GATEWAY_KEY_PROD
         self.http_client = httpx.AsyncClient(timeout=30.0)
 
         # Token cache
@@ -110,7 +115,8 @@ class CJClient:
             },
             headers={
                 "Content-Type": "application/json",
-                "CJ-Gateway-APIKey": token,
+                "Accept": "application/json",
+                "CJ-Gateway-APIKey": self.gateway_key,
             },
         )
         resp.raise_for_status()
@@ -131,8 +137,10 @@ class CJClient:
         self, token: str, invoice_no: str, request: ShippingRequest
     ) -> None:
         """접수 등록 (RegBook)"""
-        today = datetime.now().strftime("%Y%m%d")
-        order_id = request.order_id or f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        now = datetime.now()
+        today = now.strftime("%Y%m%d")
+        tomorrow = (now + timedelta(days=1)).strftime("%Y%m%d")
+        order_id = request.order_id or f"ORD{now.strftime('%Y%m%d%H%M%S')}"
         mpck_key = f"{today}_{self.customer_id}_{order_id}"
 
         s1, s2, s3 = self._split_phone(request.sender_phone)
@@ -146,7 +154,7 @@ class CJClient:
                 "TOKEN_NUM": token,
                 "RCPT_YMD": today,
                 "CUST_USE_NO": order_id,
-                "RCPT_DV": "01",
+                "RCPT_DV": "02",
                 "WORK_DV_CD": "01",
                 "REQ_DV_CD": "01",
                 "MPCK_KEY": mpck_key,
@@ -155,6 +163,8 @@ class CJClient:
                 "CNTR_ITEM_CD": "01",
                 "BOX_TYPE_CD": "02",
                 "BOX_QTY": "1",
+                "FRT": "0",
+                "CUST_MGMT_DLCM_CD": "T00002",
                 "SENDR_NM": request.sender_name,
                 "SENDR_TEL_NO1": s1,
                 "SENDR_TEL_NO2": s2,
@@ -162,6 +172,9 @@ class CJClient:
                 "SENDR_CELL_NO1": s1,
                 "SENDR_CELL_NO2": s2,
                 "SENDR_CELL_NO3": s3,
+                "SENDR_SAFE_NO1": s1,
+                "SENDR_SAFE_NO2": s2,
+                "SENDR_SAFE_NO3": s3,
                 "SENDR_ZIP_NO": request.sender_zipcode,
                 "SENDR_ADDR": s_addr,
                 "SENDR_DETAIL_ADDR": s_detail,
@@ -172,15 +185,54 @@ class CJClient:
                 "RCVR_CELL_NO1": r1,
                 "RCVR_CELL_NO2": r2,
                 "RCVR_CELL_NO3": r3,
+                "RCVR_SAFE_NO1": r1,
+                "RCVR_SAFE_NO2": r2,
+                "RCVR_SAFE_NO3": r3,
                 "RCVR_ZIP_NO": request.receiver_zipcode,
                 "RCVR_ADDR": r_addr,
                 "RCVR_DETAIL_ADDR": r_detail,
+                "ORDRR_NM": request.sender_name,
+                "ORDRR_TEL_NO1": s1,
+                "ORDRR_TEL_NO2": s2,
+                "ORDRR_TEL_NO3": s3,
+                "ORDRR_CELL_NO1": s1,
+                "ORDRR_CELL_NO2": s2,
+                "ORDRR_CELL_NO3": s3,
+                "ORDRR_SAFE_NO1": s1,
+                "ORDRR_SAFE_NO2": s2,
+                "ORDRR_SAFE_NO3": s3,
+                "ORDRR_ZIP_NO": request.sender_zipcode,
+                "ORDRR_ADDR": s_addr,
+                "ORDRR_DETAIL_ADDR": s_detail,
                 "INVC_NO": invoice_no,
+                "ORI_INVC_NO": invoice_no,
+                "ORI_ORD_NO": order_id,
+                "COLCT_EXPCT_YMD": tomorrow,
+                "COLCT_EXPCT_HOUR": "11",
+                "SHIP_EXPCT_YMD": tomorrow,
+                "SHIP_EXPCT_HOUR": "11",
+                "PRT_ST": "1",
+                "ARTICLE_AMT": "1",
+                "REMARK_1": request.memo or "",
+                "REMARK_2": "",
+                "REMARK_3": "",
+                "COD_YN": "20",
+                "ETC_1": "",
+                "ETC_2": "1",
+                "ETC_3": "",
+                "ETC_4": "",
+                "ETC_5": "",
+                "DLV_DV": "01",
+                "RCPT_SERIAL": "",
                 "ARRAY": [
                     {
                         "MPCK_SEQ": "1",
+                        "GDS_CD": "01",
                         "GDS_NM": request.product_name,
                         "GDS_QTY": str(request.quantity),
+                        "UNIT_CD": "01",
+                        "UNIT_NM": "EA",
+                        "GDS_AMT": "0",
                     }
                 ],
             }
@@ -192,7 +244,8 @@ class CJClient:
             json=payload,
             headers={
                 "Content-Type": "application/json",
-                "CJ-Gateway-APIKey": token,
+                "Accept": "application/json",
+                "CJ-Gateway-APIKey": self.gateway_key,
             },
         )
         resp.raise_for_status()

@@ -15,6 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from auth import extract_credentials_auto, set_credentials, get_credentials, AUTH_HEADERS_SPEC
 from tools.orders import get_orders
 from tools.shipping import issue_invoice, register_invoice, process_orders
+from tools.config import check_config
 import database as db
 from email_service import send_verification_email
 
@@ -155,8 +156,9 @@ def render_page(title: str, content: str, user_id: Optional[int] = None) -> str:
         email = html.escape(user["email"]) if user else ""
         nav = f"""
         <div class="nav">
-            <a href="/settings">API 설정</a>
-            <a href="/tokens">토큰 관리</a>
+            <a href="/dashboard">대시보드</a>
+            <a href="/settings">설정</a>
+            <a href="/tokens">토큰</a>
             <span style="float: right; color: #888;">{email} | <a href="/logout">로그아웃</a></span>
         </div>
         """
@@ -177,8 +179,13 @@ def render_page(title: str, content: str, user_id: Optional[int] = None) -> str:
 
 MCP_TOOLS = [
     {
+        "name": "check_config",
+        "description": "현재 설정 상태를 확인합니다. 어떤 기능이 사용 가능한지 점검할 때 사용하세요.",
+        "inputSchema": {"type": "object", "properties": {}}
+    },
+    {
         "name": "get_orders",
-        "description": "쿠팡에서 신규 주문을 조회합니다",
+        "description": "쿠팡에서 신규 주문을 조회합니다. 주문 확인만 하고 싶을 때 사용하세요. 설정 필요: 쿠팡 API 키",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -188,7 +195,7 @@ MCP_TOOLS = [
     },
     {
         "name": "issue_invoice",
-        "description": "CJ대한통운 API로 송장을 발급합니다",
+        "description": "CJ대한통운으로 송장을 발급합니다. 개별 주문을 수동 처리할 때 사용하세요. 설정 필요: CJ대한통운 고객정보, 발송인 정보",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -204,7 +211,7 @@ MCP_TOOLS = [
     },
     {
         "name": "register_invoice",
-        "description": "쿠팡에 송장번호를 등록합니다",
+        "description": "쿠팡에 송장번호를 등록합니다. issue_invoice로 발급받은 송장을 쿠팡에 입력할 때 사용하세요. 설정 필요: 쿠팡 API 키",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -216,11 +223,12 @@ MCP_TOOLS = [
     },
     {
         "name": "process_orders",
-        "description": "쿠팡 주문 조회 → CJ 송장 발급 → 쿠팡 송장 등록을 한번에 자동 처리합니다",
+        "description": "주문 조회→송장 발급→쿠팡 등록을 한번에 처리합니다. 일상적인 주문 처리에 이 도구를 사용하세요. dry_run=true로 미리보기 가능. 설정 필요: 쿠팡 API 키, CJ대한통운 고객정보, 발송인 정보",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "days": {"type": "integer", "default": 7, "description": "조회 기간 (최근 N일)"}
+                "days": {"type": "integer", "default": 7, "description": "조회 기간 (최근 N일)"},
+                "dry_run": {"type": "boolean", "default": False, "description": "true면 미리보기만 (송장 발급 안 함)"}
             }
         }
     }
@@ -229,7 +237,9 @@ MCP_TOOLS = [
 
 async def execute_tool(name: str, arguments: dict) -> dict:
     """MCP Tool 실행"""
-    if name == "get_orders":
+    if name == "check_config":
+        return await check_config()
+    elif name == "get_orders":
         return await get_orders(days=arguments.get("days", 7))
     elif name == "issue_invoice":
         return await issue_invoice(
@@ -246,7 +256,10 @@ async def execute_tool(name: str, arguments: dict) -> dict:
             tracking_number=arguments["tracking_number"]
         )
     elif name == "process_orders":
-        return await process_orders(days=arguments.get("days", 7))
+        return await process_orders(
+            days=arguments.get("days", 7),
+            dry_run=arguments.get("dry_run", False)
+        )
     return {"error": f"Unknown tool: {name}"}
 
 
@@ -481,7 +494,7 @@ async def login_submit(request: Request, email: str = Form(...), password: str =
         return RedirectResponse("/login?error=이메일 인증이 필요합니다", status_code=303)
 
     session_id = create_session(user_id)
-    response = RedirectResponse("/settings", status_code=303)
+    response = RedirectResponse("/dashboard", status_code=303)
     response.set_cookie("session", session_id, httponly=True, secure=True, samesite="lax", max_age=86400*30)
     return response
 
@@ -493,6 +506,169 @@ async def logout(session: Optional[str] = Cookie(None)):
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie("session")
     return response
+
+
+# ============ 웹 UI - 대시보드 ============
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(session: Optional[str] = Cookie(None)):
+    user_id = get_session_user(session)
+    if not user_id:
+        return RedirectResponse("/login", status_code=303)
+
+    creds = db.get_user_credentials(user_id) or {}
+    coupang_ok = all(creds.get(k) for k in ["coupang_vendor_id", "coupang_access_key", "coupang_secret_key"])
+    cj_ok = all(creds.get(k) for k in ["cj_customer_id", "cj_biz_reg_num"])
+    sender_ok = all(creds.get(k) for k in ["sender_name", "sender_phone", "sender_address"])
+
+    status_items = ""
+    for label, ok in [("쿠팡 API", coupang_ok), ("CJ대한통운", cj_ok), ("발송인 정보", sender_ok)]:
+        icon = "✅" if ok else "❌"
+        status_items += f'<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #222;"><span>{label}</span><span>{icon}</span></div>'
+
+    all_ok = coupang_ok and cj_ok and sender_ok
+    action_disabled = "" if all_ok else "disabled style='opacity:0.5;cursor:not-allowed;'"
+
+    if not all_ok:
+        setup_msg = '<div class="error" style="margin-top:16px;">모든 설정을 완료해야 주문 처리를 사용할 수 있습니다. <a href="/settings" style="color:#fca5a5;">설정하기 →</a></div>'
+    else:
+        setup_msg = ""
+
+    content = f"""
+    <div class="card">
+        <div class="field-group-title">연동 상태</div>
+        {status_items}
+        {setup_msg}
+    </div>
+
+    <div class="card">
+        <div class="field-group-title">주문 처리</div>
+        <p style="color:#aaa;margin-bottom:16px;font-size:14px;">쿠팡 신규 주문을 조회하고, CJ대한통운 송장을 발급하고, 쿠팡에 자동 등록합니다.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button onclick="fetchOrders()" {action_disabled}>📦 주문 조회</button>
+            <button onclick="processAll(true)" {action_disabled}>👁 미리보기</button>
+            <button onclick="if(confirm('모든 신규 주문에 송장을 발급하고 쿠팡에 등록합니다. 진행하시겠습니까?'))processAll(false)" {action_disabled} style="background:#22c55e;">🚀 일괄 처리</button>
+        </div>
+    </div>
+
+    <div id="result-area" class="card" style="display:none;">
+        <div class="field-group-title">결과</div>
+        <div id="result-content" style="font-size:14px;"></div>
+    </div>
+
+    <script>
+    const API_BASE = '';
+    async function apiCall(action, body={{}}) {{
+        const res = await fetch('/api/dashboard/' + action, {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json', 'X-Requested-With': 'SoloSeller'}},
+            body: JSON.stringify(body)
+        }});
+        return await res.json();
+    }}
+
+    function esc(s) {{ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }}
+
+    function showResult(data) {{
+        const area = document.getElementById('result-area');
+        const content = document.getElementById('result-content');
+        area.style.display = 'block';
+        if (!data.success && data.error) {{
+            content.innerHTML = '<div class="error">' + esc(data.error) + '</div>';
+            return;
+        }}
+        let html = '';
+        if (data.orders && data.orders.length > 0) {{
+            html += '<table style="width:100%;font-size:13px;"><tr style="color:#888;text-align:left;"><th style="padding:8px;">주문ID</th><th>수령인</th><th>상품</th><th>상태</th></tr>';
+            data.orders.forEach(o => {{
+                const status = o.status || (o.tracking_number ? '✅ ' + esc(o.tracking_number) : '대기');
+                html += '<tr style="border-top:1px solid #222;"><td style="padding:8px;font-family:monospace;font-size:12px;">' + esc(o.order_id) + '</td><td>' + esc(o.receiver_name) + '</td><td>' + esc(o.product_summary || o.product_name || '') + '</td><td>' + status + '</td></tr>';
+            }});
+            html += '</table>';
+        }} else if (data.results && data.results.length > 0) {{
+            html += '<table style="width:100%;font-size:13px;"><tr style="color:#888;text-align:left;"><th style="padding:8px;">주문ID</th><th>송장번호</th><th>상태</th></tr>';
+            data.results.forEach(r => {{
+                const st = r.status === '완료' ? '✅ 완료' : r.status === '테스트' ? '⚠️ 테스트' : '❌ ' + esc(r.error||r.status);
+                html += '<tr style="border-top:1px solid #222;"><td style="padding:8px;font-family:monospace;font-size:12px;">' + esc(r.order_id) + '</td><td style="font-family:monospace;">' + esc(r.tracking_number||'-') + '</td><td>' + st + '</td></tr>';
+            }});
+            html += '</table>';
+        }}
+        if (data.message) html = '<p style="margin-bottom:12px;">' + esc(data.message) + '</p>' + html;
+        if (data.total !== undefined) html += '<p style="margin-top:12px;color:#888;">총 ' + data.total + '건' + (data.processed !== undefined ? ' | 처리 ' + data.processed + '건' : '') + (data.failed ? ' | 실패 ' + data.failed + '건' : '') + '</p>';
+        content.innerHTML = html || '<p style="color:#888;">처리할 주문이 없습니다.</p>';
+    }}
+
+    async function fetchOrders() {{
+        showResult({{message: '조회 중...'}});
+        const data = await apiCall('orders');
+        showResult(data);
+    }}
+
+    async function processAll(dryRun) {{
+        showResult({{message: dryRun ? '미리보기 조회 중...' : '처리 중... 잠시 기다려주세요.'}});
+        const data = await apiCall('process', {{dry_run: dryRun}});
+        showResult(data);
+    }}
+    </script>
+    """
+    return HTMLResponse(render_page("대시보드", content, user_id))
+
+
+def _dashboard_auth(request: Request, session: Optional[str]):
+    """대시보드 API 인증 + CSRF 검증"""
+    if request.headers.get("X-Requested-With") != "SoloSeller":
+        return None, {"success": False, "error": "잘못된 요청입니다."}
+    user_id = get_session_user(session)
+    if not user_id:
+        return None, {"success": False, "error": "로그인이 필요합니다."}
+    return user_id, None
+
+
+def _load_user_creds(user_id: int):
+    """사용자 인증 정보 로드 + ContextVar 설정"""
+    from auth import UserCredentials, set_credentials
+    creds_dict = db.get_user_credentials(user_id) or {}
+    creds = UserCredentials(
+        coupang_vendor_id=creds_dict.get("coupang_vendor_id"),
+        coupang_access_key=creds_dict.get("coupang_access_key"),
+        coupang_secret_key=creds_dict.get("coupang_secret_key"),
+        cj_customer_id=creds_dict.get("cj_customer_id"),
+        cj_biz_reg_num=creds_dict.get("cj_biz_reg_num"),
+        sender_name=creds_dict.get("sender_name"),
+        sender_phone=creds_dict.get("sender_phone"),
+        sender_zipcode=creds_dict.get("sender_zipcode"),
+        sender_address=creds_dict.get("sender_address"),
+    )
+    set_credentials(creds)
+    return creds
+
+
+@app.post("/api/dashboard/orders")
+async def api_dashboard_orders(request: Request, session: Optional[str] = Cookie(None)):
+    user_id, err = _dashboard_auth(request, session)
+    if err:
+        return err
+    from auth import set_credentials
+    try:
+        _load_user_creds(user_id)
+        return await get_orders(days=7)
+    finally:
+        set_credentials(None)
+
+
+@app.post("/api/dashboard/process")
+async def api_dashboard_process(request: Request, session: Optional[str] = Cookie(None)):
+    user_id, err = _dashboard_auth(request, session)
+    if err:
+        return err
+    body = await request.json()
+    dry_run = body.get("dry_run", True)
+    from auth import set_credentials
+    try:
+        _load_user_creds(user_id)
+        return await process_orders(days=7, dry_run=dry_run)
+    finally:
+        set_credentials(None)
 
 
 # ============ 웹 UI - API 설정 ============
