@@ -14,3 +14,6 @@ structlog>=23.2.0
 
 # Security
 bcrypt>=4.0.0
+
+# Scheduler
+apscheduler>=3.10.0
