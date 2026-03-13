@@ -1,21 +1,13 @@
 # MCP Server
 mcp>=1.0.0
 
-# HTTP Server (다중 사용자)
+# HTTP Server
 fastapi>=0.109.0
 uvicorn>=0.27.0
 python-multipart>=0.0.6
 
 # HTTP Client
 httpx>=0.25.0
-aiohttp>=3.9.0
-
-# Data Validation
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
-
-# Environment Variables
-python-dotenv>=1.0.0
 
 # Logging
 structlog>=23.2.0
