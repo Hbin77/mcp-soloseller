@@ -1,38 +1,47 @@
-"""CJ대한통운 API 클라이언트"""
+"""CJ대한통운 API 클라이언트
+
+NOTE: CJ대한통운 API는 비공개 B2B API입니다.
+아래 엔드포인트와 인증 방식은 추정값이며, 실제 API Portal에서
+스펙을 확인한 후 수정이 필요합니다.
+
+실제 연동 시: https://openapi.cjlogistics.com/ 에서 API 문서 확인
+"""
 import httpx
 import hashlib
 import hmac
 import time
 import json
-import random
-import structlog
+import os
+import secrets
 from datetime import datetime
 from typing import Optional
 
 from models import ShippingRequest, ShippingResponse
 
-logger = structlog.get_logger()
-
 
 class CJClient:
     """CJ대한통운 API 클라이언트"""
 
+    # NOTE: 실제 API URL은 CJ API Portal에서 확인 필요
     BASE_URL = "https://api.cjlogistics.com"
 
     def __init__(
         self,
         customer_id: str,
         api_key: str,
-        contract_code: Optional[str] = None
+        test_mode: Optional[bool] = None
     ):
         self.customer_id = customer_id
         self.api_key = api_key
-        self.contract_code = contract_code or customer_id
-        self.test_mode = not api_key
+        # test_mode: 명시적으로 지정하지 않으면 API 키 유무로 판단
+        if test_mode is not None:
+            self.test_mode = test_mode
+        else:
+            self.test_mode = not api_key or os.environ.get("CJ_TEST_MODE", "").lower() == "true"
         self.http_client = httpx.AsyncClient(timeout=30.0)
 
     def _generate_signature(self, timestamp: str, data: str = "") -> str:
-        """API 서명 생성"""
+        """API 서명 생성 (NOTE: 실제 인증 방식은 확인 필요)"""
         message = f"{self.customer_id}{timestamp}{data}"
         signature = hmac.new(
             self.api_key.encode('utf-8'),
@@ -50,12 +59,10 @@ class CJClient:
             "X-Customer-Id": self.customer_id,
             "X-Timestamp": timestamp,
             "X-Signature": signature,
-            "X-Contract-Code": self.contract_code
         }
 
     async def request_invoice(self, request: ShippingRequest) -> ShippingResponse:
         """송장 발급"""
-        # API 설정이 없으면 테스트 모드
         if self.test_mode:
             return self._test_invoice(request)
 
@@ -88,34 +95,35 @@ class CJClient:
             if response.status_code in [200, 201]:
                 result = response.json()
                 tracking_number = result.get("trackingNumber") or result.get("invoiceNo")
-
-                logger.info("CJ 송장 발급 성공", tracking_number=tracking_number)
                 return ShippingResponse(
                     success=True,
-                    tracking_number=tracking_number,
-                    carrier="cj",
-                    carrier_name="CJ대한통운"
+                    tracking_number=tracking_number
                 )
             else:
-                logger.error("CJ 송장 발급 실패", status=response.status_code)
-                return self._test_invoice(request)
+                error_detail = response.text[:200] if response.text else f"HTTP {response.status_code}"
+                return ShippingResponse(
+                    success=False,
+                    error=f"CJ API 오류: {error_detail}"
+                )
 
         except httpx.ConnectError:
-            logger.warning("CJ API 연결 실패 - 테스트 모드로 대체")
-            return self._test_invoice(request)
+            return ShippingResponse(
+                success=False,
+                error="CJ API 서버에 연결할 수 없습니다. 네트워크를 확인하세요."
+            )
         except Exception as e:
-            logger.exception("CJ 송장 발급 오류", error=str(e))
-            return self._test_invoice(request)
+            return ShippingResponse(
+                success=False,
+                error=f"CJ 송장 발급 중 오류 발생: {str(e)}"
+            )
 
     def _test_invoice(self, request: ShippingRequest) -> ShippingResponse:
-        """테스트 송장 발급"""
-        tracking_number = f"TEST{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(1000, 9999)}"
-        logger.info("테스트 송장 발급 (CJ)", tracking_number=tracking_number)
+        """테스트 송장 발급 (명시적 테스트 모드)"""
+        tracking_number = f"TEST-{datetime.now().strftime('%Y%m%d%H%M%S')}-{secrets.randbelow(10000):04d}"
         return ShippingResponse(
             success=True,
             tracking_number=tracking_number,
-            carrier="cj",
-            carrier_name="CJ대한통운"
+            is_test=True
         )
 
     async def close(self):

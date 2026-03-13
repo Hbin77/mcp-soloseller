@@ -61,41 +61,23 @@ def init_database():
             )
         """)
 
-        # API 키 설정 테이블
+        # API 키 설정 테이블 (MVP: 쿠팡 + CJ대한통운)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_credentials (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER UNIQUE NOT NULL,
-                -- 네이버
-                naver_client_id TEXT,
-                naver_client_secret TEXT,
-                naver_seller_id TEXT,
                 -- 쿠팡
                 coupang_vendor_id TEXT,
                 coupang_access_key TEXT,
                 coupang_secret_key TEXT,
-                -- 택배사 - CJ
+                -- CJ대한통운
                 cj_customer_id TEXT,
                 cj_api_key TEXT,
-                -- 택배사 - 한진
-                hanjin_customer_id TEXT,
-                hanjin_api_key TEXT,
-                -- 택배사 - 롯데
-                lotte_customer_id TEXT,
-                lotte_api_key TEXT,
-                -- 택배사 - 로젠
-                logen_customer_id TEXT,
-                logen_api_key TEXT,
-                -- 택배사 - 우체국
-                epost_customer_id TEXT,
-                epost_api_key TEXT,
                 -- 발송인 정보
                 sender_name TEXT,
                 sender_phone TEXT,
                 sender_zipcode TEXT,
                 sender_address TEXT,
-                -- 기본 택배사
-                default_carrier TEXT DEFAULT 'cj',
                 -- 메타
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id)
@@ -222,15 +204,9 @@ def get_user_credentials(user_id: int) -> Optional[dict]:
 def update_user_credentials(user_id: int, credentials: dict) -> bool:
     """사용자 API 키 업데이트"""
     allowed_fields = [
-        'naver_client_id', 'naver_client_secret', 'naver_seller_id',
         'coupang_vendor_id', 'coupang_access_key', 'coupang_secret_key',
         'cj_customer_id', 'cj_api_key',
-        'hanjin_customer_id', 'hanjin_api_key',
-        'lotte_customer_id', 'lotte_api_key',
-        'logen_customer_id', 'logen_api_key',
-        'epost_customer_id', 'epost_api_key',
-        'sender_name', 'sender_phone', 'sender_zipcode', 'sender_address',
-        'default_carrier'
+        'sender_name', 'sender_phone', 'sender_zipcode', 'sender_address'
     ]
 
     # 허용된 필드만 필터링

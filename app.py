@@ -1,4 +1,4 @@
-"""HTTP 기반 MCP 서버 (다중 사용자 지원) + 웹 UI"""
+"""HTTP 기반 MCP 서버 (다중 사용자 지원) + 웹 UI - MVP (쿠팡 + CJ대한통운)"""
 import html
 import json
 import secrets
@@ -12,19 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from auth import (
-    extract_credentials_auto,
-    set_credentials,
-    get_credentials,
-    AUTH_HEADERS_SPEC
-)
-from models import CarrierType
+from auth import extract_credentials_auto, set_credentials, get_credentials, AUTH_HEADERS_SPEC
 from tools.orders import get_orders
-from tools.shipping import (
-    issue_invoice, batch_issue_invoices,
-    register_invoice, batch_register_invoices,
-    get_available_carriers, get_channel_status
-)
+from tools.shipping import issue_invoice, register_invoice, process_orders
 import database as db
 from email_service import send_verification_email
 
@@ -34,72 +24,48 @@ TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
 
 # 세션 저장소 (메모리 - 프로덕션에서는 Redis 등 사용 권장)
 sessions: dict[str, int] = {}
-# 세션별 플래시 메시지
 session_flash: dict[str, dict] = {}
-# 임시 회원가입 데이터 저장 (이메일 인증 전)
 pending_registrations: dict[str, dict] = {}
 
 
 def get_session_user(session_id: Optional[str]) -> Optional[int]:
-    """세션에서 사용자 ID 조회"""
     if session_id and session_id in sessions:
         return sessions[session_id]
     return None
 
 
 def create_session(user_id: int) -> str:
-    """새 세션 생성"""
     session_id = secrets.token_urlsafe(32)
     sessions[session_id] = user_id
     return session_id
 
 
 async def verify_turnstile(token: str) -> bool:
-    """Cloudflare Turnstile 검증"""
     if not TURNSTILE_SECRET_KEY:
-        # 개발 환경에서는 Turnstile 비활성화
-        print("[TURNSTILE] SECRET_KEY 없음 - 검증 건너뜀")
         return True
-
     if not token:
-        print("[TURNSTILE] 토큰 없음")
         return False
-
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
                 "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-                data={
-                    "secret": TURNSTILE_SECRET_KEY,
-                    "response": token
-                }
+                data={"secret": TURNSTILE_SECRET_KEY, "response": token}
             )
-            result = response.json()
-            success = result.get("success", False)
-            print(f"[TURNSTILE] 응답: {result}")
-            if not success:
-                print(f"[TURNSTILE] 실패 원인: {result.get('error-codes', [])}")
-            return success
-    except Exception as e:
-        print(f"[TURNSTILE] 예외 발생: {e}")
+            return response.json().get("success", False)
+    except Exception:
         return False
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """보안 헤더 추가 미들웨어"""
-
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 
 
 class CredentialsMiddleware(BaseHTTPMiddleware):
-    """HTTP 헤더에서 사용자 인증 정보를 추출하는 미들웨어"""
-
     async def dispatch(self, request: Request, call_next):
         if request.url.path.startswith("/mcp"):
             headers = dict(request.headers)
@@ -113,12 +79,11 @@ class CredentialsMiddleware(BaseHTTPMiddleware):
 
 
 app = FastAPI(
-    title="Shop Automation MCP Server",
-    description="쇼핑몰 주문 관리 및 송장 처리 자동화 MCP 서버",
-    version="1.0.0"
+    title="SoloSeller MCP Server",
+    description="쿠팡 주문 관리 및 CJ대한통운 송장 자동화 MCP 서버",
+    version="2.0.0-mvp"
 )
 
-# CORS 허용 도메인 설정
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://soloseller.cloud").split(",")
 
 app.add_middleware(
@@ -131,19 +96,17 @@ app.add_middleware(
 app.add_middleware(CredentialsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
-# 정적 파일 서빙
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # ============ HTML 템플릿 ============
 
 OG_TAGS = """
-<meta property="og:title" content="SoloSeller - 쇼핑몰 자동화 MCP">
-<meta property="og:description" content="네이버 스마트스토어와 쿠팡 판매자를 위한 주문 관리 자동화 MCP 서버">
+<meta property="og:title" content="SoloSeller - 쿠팡 송장 자동화 MCP">
+<meta property="og:description" content="쿠팡 판매자를 위한 주문 관리 및 송장 자동화 MCP 서버">
 <meta property="og:image" content="https://soloseller.cloud/static/logo.png">
 <meta property="og:url" content="https://soloseller.cloud">
 <meta property="og:type" content="website">
-<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/png" href="/static/logo.png">
 """
 
@@ -169,8 +132,6 @@ BASE_STYLE = """
     button:hover, .btn:hover { background: #3a8eef; }
     .btn-danger { background: #ef4444; }
     .btn-danger:hover { background: #dc2626; }
-    .btn-secondary { background: #333; }
-    .btn-secondary:hover { background: #444; }
     .error { background: #7f1d1d; color: #fca5a5; padding: 12px; border-radius: 8px; margin-bottom: 20px; }
     .success { background: #14532d; color: #86efac; padding: 12px; border-radius: 8px; margin-bottom: 20px; }
     .token-box { background: #0f0f0f; padding: 12px; border-radius: 8px; font-family: monospace; word-break: break-all; margin: 10px 0; font-size: 13px; }
@@ -181,7 +142,6 @@ BASE_STYLE = """
     a:hover { text-decoration: underline; }
     .nav { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #333; }
     .nav a { margin-right: 20px; }
-    .field-group { margin-bottom: 24px; }
     .field-group-title { font-size: 16px; color: #4a9eff; margin-bottom: 16px; }
     small { color: #666; font-size: 12px; }
 </style>
@@ -204,8 +164,7 @@ def render_page(title: str, content: str, user_id: Optional[int] = None) -> str:
     <!DOCTYPE html>
     <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title} - SoloSeller MCP</title>
-    {OG_TAGS}
-    {BASE_STYLE}</head>
+    {OG_TAGS}{BASE_STYLE}</head>
     <body><div class="container">{nav}
     <div style="text-align: center; margin-bottom: 20px;">
         <img src="/static/logo.png" alt="SoloSeller" style="height: 60px;">
@@ -219,141 +178,75 @@ def render_page(title: str, content: str, user_id: Optional[int] = None) -> str:
 MCP_TOOLS = [
     {
         "name": "get_orders",
-        "description": "네이버 스마트스토어와 쿠팡에서 신규 주문을 조회합니다",
+        "description": "쿠팡에서 신규 주문을 조회합니다",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "channel": {"type": "string", "enum": ["all", "naver", "coupang"], "default": "all", "description": "조회할 채널"},
                 "days": {"type": "integer", "default": 7, "description": "조회 기간 (최근 N일)"}
             }
         }
     },
     {
         "name": "issue_invoice",
-        "description": "택배사 API로 송장을 발급합니다",
+        "description": "CJ대한통운 API로 송장을 발급합니다",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "order_id": {"type": "string", "description": "주문 ID"},
-                "channel": {"type": "string", "enum": ["naver", "coupang"]},
-                "carrier": {"type": "string", "enum": ["cj", "hanjin", "lotte", "logen", "epost"]},
-                "receiver_name": {"type": "string"},
-                "receiver_phone": {"type": "string"},
-                "receiver_address": {"type": "string"},
-                "receiver_zipcode": {"type": "string"},
-                "product_name": {"type": "string"}
+                "order_id": {"type": "string", "description": "쿠팡 주문 ID"},
+                "receiver_name": {"type": "string", "description": "수령인명"},
+                "receiver_phone": {"type": "string", "description": "수령인 연락처"},
+                "receiver_address": {"type": "string", "description": "배송 주소"},
+                "receiver_zipcode": {"type": "string", "description": "우편번호"},
+                "product_name": {"type": "string", "description": "상품명"}
             },
-            "required": ["order_id", "channel", "receiver_name", "receiver_phone", "receiver_address"]
-        }
-    },
-    {
-        "name": "batch_issue_invoices",
-        "description": "여러 주문에 대해 일괄로 송장을 발급합니다",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "orders": {
-                    "type": "array",
-                    "description": "주문 목록",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "order_id": {"type": "string", "description": "주문 ID"},
-                            "channel": {"type": "string", "enum": ["naver", "coupang"]},
-                            "receiver_name": {"type": "string", "description": "수령인명"},
-                            "receiver_phone": {"type": "string", "description": "수령인 연락처"},
-                            "receiver_address": {"type": "string", "description": "배송 주소"},
-                            "receiver_zipcode": {"type": "string", "description": "우편번호"},
-                            "product_name": {"type": "string", "description": "상품명"}
-                        },
-                        "required": ["order_id", "channel", "receiver_name", "receiver_phone", "receiver_address"]
-                    }
-                },
-                "carrier": {"type": "string", "enum": ["cj", "hanjin", "lotte", "logen", "epost"], "description": "택배사"}
-            },
-            "required": ["orders"]
+            "required": ["order_id", "receiver_name", "receiver_phone", "receiver_address"]
         }
     },
     {
         "name": "register_invoice",
-        "description": "쇼핑몰에 송장번호를 등록합니다",
+        "description": "쿠팡에 송장번호를 등록합니다",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "order_id": {"type": "string"},
-                "channel": {"type": "string", "enum": ["naver", "coupang"]},
-                "tracking_number": {"type": "string"},
-                "carrier": {"type": "string"}
+                "order_id": {"type": "string", "description": "쿠팡 주문 ID"},
+                "tracking_number": {"type": "string", "description": "송장번호"}
             },
-            "required": ["order_id", "channel", "tracking_number"]
+            "required": ["order_id", "tracking_number"]
         }
     },
     {
-        "name": "batch_register_invoices",
-        "description": "여러 주문에 송장번호를 일괄 등록합니다",
+        "name": "process_orders",
+        "description": "쿠팡 주문 조회 → CJ 송장 발급 → 쿠팡 송장 등록을 한번에 자동 처리합니다",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "registrations": {
-                    "type": "array",
-                    "description": "등록할 송장 목록",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "order_id": {"type": "string", "description": "주문 ID"},
-                            "channel": {"type": "string", "enum": ["naver", "coupang"], "description": "채널"},
-                            "tracking_number": {"type": "string", "description": "송장번호"},
-                            "carrier": {"type": "string", "enum": ["cj", "hanjin", "lotte", "logen", "epost"], "description": "택배사"}
-                        },
-                        "required": ["order_id", "channel", "tracking_number"]
-                    }
-                }
-            },
-            "required": ["registrations"]
+                "days": {"type": "integer", "default": 7, "description": "조회 기간 (최근 N일)"}
+            }
         }
-    },
-    {
-        "name": "get_available_carriers",
-        "description": "설정된 택배사 목록과 상태를 조회합니다",
-        "inputSchema": {"type": "object", "properties": {}}
-    },
-    {
-        "name": "get_channel_status",
-        "description": "네이버/쿠팡 API 연결 상태를 확인합니다",
-        "inputSchema": {"type": "object", "properties": {}}
     }
 ]
 
 
 async def execute_tool(name: str, arguments: dict) -> dict:
     """MCP Tool 실행"""
-    creds = get_credentials()
-    default_carrier = creds.default_carrier if creds else "cj"
-
     if name == "get_orders":
-        return await get_orders(channel=arguments.get("channel", "all"), days=arguments.get("days", 7))
+        return await get_orders(days=arguments.get("days", 7))
     elif name == "issue_invoice":
         return await issue_invoice(
-            order_id=arguments["order_id"], channel=arguments["channel"],
-            carrier=arguments.get("carrier", default_carrier),
-            receiver_name=arguments["receiver_name"], receiver_phone=arguments["receiver_phone"],
+            order_id=arguments["order_id"],
+            receiver_name=arguments["receiver_name"],
+            receiver_phone=arguments["receiver_phone"],
             receiver_address=arguments["receiver_address"],
             receiver_zipcode=arguments.get("receiver_zipcode", ""),
             product_name=arguments.get("product_name", "상품")
         )
-    elif name == "batch_issue_invoices":
-        return await batch_issue_invoices(orders=arguments["orders"], carrier=arguments.get("carrier", default_carrier))
     elif name == "register_invoice":
         return await register_invoice(
-            order_id=arguments["order_id"], channel=arguments["channel"],
-            tracking_number=arguments["tracking_number"], carrier=arguments.get("carrier", default_carrier)
+            order_id=arguments["order_id"],
+            tracking_number=arguments["tracking_number"]
         )
-    elif name == "batch_register_invoices":
-        return await batch_register_invoices(registrations=arguments["registrations"])
-    elif name == "get_available_carriers":
-        return await get_available_carriers()
-    elif name == "get_channel_status":
-        return await get_channel_status()
+    elif name == "process_orders":
+        return await process_orders(days=arguments.get("days", 7))
     return {"error": f"Unknown tool: {name}"}
 
 
@@ -361,17 +254,15 @@ async def execute_tool(name: str, arguments: dict) -> dict:
 
 @app.get("/")
 async def root():
-    """서버 상태"""
-    return {"name": "shop-automation", "version": "1.0.0", "status": "running"}
+    return {"name": "soloseller-mvp", "version": "2.0.0", "status": "running"}
 
 
 @app.get("/mcp/info")
 async def mcp_info():
-    """MCP 서버 정보"""
     return {
-        "name": "shop-automation",
-        "description": "쇼핑몰 주문 관리 및 송장 처리 자동화",
-        "version": "1.0.0",
+        "name": "soloseller-mvp",
+        "description": "쿠팡 주문 관리 + CJ대한통운 송장 자동화",
+        "version": "2.0.0",
         "protocol": "mcp",
         "transport": "streamable-http",
         "authentication": AUTH_HEADERS_SPEC,
@@ -381,13 +272,12 @@ async def mcp_info():
 
 @app.get("/mcp")
 async def mcp_get():
-    """MCP 엔드포인트 GET - 서버 정보 반환 (PlayMCP 호환)"""
     return {
         "jsonrpc": "2.0",
         "result": {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "shop-automation", "version": "1.0.0"}
+            "serverInfo": {"name": "soloseller-mvp", "version": "2.0.0"}
         },
         "id": None
     }
@@ -395,7 +285,6 @@ async def mcp_get():
 
 @app.post("/mcp")
 async def mcp_endpoint(request: Request):
-    """MCP JSON-RPC 엔드포인트"""
     try:
         body = await request.json()
     except Exception:
@@ -413,7 +302,7 @@ async def mcp_endpoint(request: Request):
             result = {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "shop-automation", "version": "1.0.0"}
+                "serverInfo": {"name": "soloseller-mvp", "version": "2.0.0"}
             }
         elif method == "tools/list":
             result = {"tools": MCP_TOOLS}
@@ -443,7 +332,6 @@ async def mcp_endpoint(request: Request):
 # ============ 웹 UI - 인증 ============
 
 def get_turnstile_widget() -> str:
-    """Turnstile 위젯 HTML 반환"""
     if not TURNSTILE_SITE_KEY:
         return ""
     return f'''
@@ -477,34 +365,24 @@ async def register_page(error: str = "", success: str = ""):
 
 
 @app.post("/register", response_class=HTMLResponse)
-async def register_submit(
-    request: Request,
-    email: str = Form(...),
-    password: str = Form(...),
-    password2: str = Form(...)
-):
-    # Turnstile 검증
+async def register_submit(request: Request, email: str = Form(...), password: str = Form(...), password2: str = Form(...)):
     form = await request.form()
     turnstile_token = form.get("cf-turnstile-response", "")
     if not await verify_turnstile(turnstile_token):
         return RedirectResponse("/register?error=로봇 확인에 실패했습니다", status_code=303)
-
     if len(password) < 8:
         return RedirectResponse("/register?error=비밀번호는 8자 이상이어야 합니다", status_code=303)
     if password != password2:
         return RedirectResponse("/register?error=비밀번호가 일치하지 않습니다", status_code=303)
 
-    # 이미 등록된 이메일 확인
     existing_user = db.get_user_by_email(email)
     if existing_user:
         return RedirectResponse("/register?error=이미 등록된 이메일입니다", status_code=303)
 
-    # 인증 코드 생성 및 이메일 발송
     code = db.create_verification_code(email, "register")
     if not send_verification_email(email, code):
         return RedirectResponse("/register?error=인증 이메일 발송에 실패했습니다", status_code=303)
 
-    # 임시 저장 (이메일 인증 후 계정 생성)
     reg_token = secrets.token_urlsafe(32)
     pending_registrations[reg_token] = {"email": email, "password_hash": db.hash_password(password)}
 
@@ -543,28 +421,18 @@ async def verify_email_page(token: str = "", email: str = "", error: str = ""):
 
 
 @app.post("/verify-email")
-async def verify_email_submit(
-    token: str = Form(...),
-    email: str = Form(...),
-    code: str = Form(...)
-):
+async def verify_email_submit(token: str = Form(...), email: str = Form(...), code: str = Form(...)):
     if token not in pending_registrations:
         return RedirectResponse("/register?error=유효하지 않은 요청입니다", status_code=303)
-
-    # 인증 코드 확인
     if not db.verify_code(email, code, "register"):
         return RedirectResponse(f"/verify-email?token={token}&email={email}&error=인증 코드가 올바르지 않습니다", status_code=303)
 
-    # 계정 생성
     reg_data = pending_registrations.pop(token)
     user_id = db.create_user_with_hash(reg_data["email"], reg_data["password_hash"])
-
     if not user_id:
         return RedirectResponse("/register?error=회원가입에 실패했습니다", status_code=303)
 
-    # 이메일 인증 완료 처리
     db.mark_email_verified(email)
-
     return RedirectResponse("/login?success=회원가입이 완료되었습니다! 로그인해주세요", status_code=303)
 
 
@@ -572,11 +440,8 @@ async def verify_email_submit(
 async def resend_code(token: str = "", email: str = ""):
     if token not in pending_registrations:
         return RedirectResponse("/register?error=유효하지 않은 요청입니다", status_code=303)
-
-    # 새 인증 코드 생성 및 발송
     code = db.create_verification_code(email, "register")
     send_verification_email(email, code)
-
     return RedirectResponse(f"/verify-email?token={token}&email={email}", status_code=303)
 
 
@@ -603,12 +468,7 @@ async def login_page(error: str = "", success: str = ""):
 
 
 @app.post("/login")
-async def login_submit(
-    request: Request,
-    email: str = Form(...),
-    password: str = Form(...)
-):
-    # Turnstile 검증
+async def login_submit(request: Request, email: str = Form(...), password: str = Form(...)):
     form = await request.form()
     turnstile_token = form.get("cf-turnstile-response", "")
     if not await verify_turnstile(turnstile_token):
@@ -617,8 +477,6 @@ async def login_submit(
     user_id = db.authenticate_user(email, password)
     if not user_id:
         return RedirectResponse("/login?error=이메일 또는 비밀번호가 잘못되었습니다", status_code=303)
-
-    # 이메일 인증 여부 확인
     if not db.is_email_verified(email):
         return RedirectResponse("/login?error=이메일 인증이 필요합니다", status_code=303)
 
@@ -656,13 +514,6 @@ async def settings_page(session: Optional[str] = Cookie(None), success: str = ""
     {msg}
     <form method="post">
         <div class="card">
-            <div class="field-group-title">네이버 스마트스토어</div>
-            {field("naver_client_id", "Client ID")}
-            {field("naver_client_secret", "Client Secret", "password")}
-            {field("naver_seller_id", "Seller ID")}
-        </div>
-
-        <div class="card">
             <div class="field-group-title">쿠팡 WING</div>
             {field("coupang_vendor_id", "Vendor ID")}
             {field("coupang_access_key", "Access Key")}
@@ -676,47 +527,11 @@ async def settings_page(session: Optional[str] = Cookie(None), success: str = ""
         </div>
 
         <div class="card">
-            <div class="field-group-title">한진택배</div>
-            {field("hanjin_customer_id", "고객 ID")}
-            {field("hanjin_api_key", "API Key", "password")}
-        </div>
-
-        <div class="card">
-            <div class="field-group-title">롯데택배</div>
-            {field("lotte_customer_id", "고객 ID")}
-            {field("lotte_api_key", "API Key", "password")}
-        </div>
-
-        <div class="card">
-            <div class="field-group-title">로젠택배</div>
-            {field("logen_customer_id", "고객 ID")}
-            {field("logen_api_key", "API Key", "password")}
-        </div>
-
-        <div class="card">
-            <div class="field-group-title">우체국택배</div>
-            {field("epost_customer_id", "고객 ID")}
-            {field("epost_api_key", "API Key", "password")}
-        </div>
-
-        <div class="card">
             <div class="field-group-title">발송인 정보</div>
             {field("sender_name", "발송인 이름")}
             {field("sender_phone", "연락처")}
             {field("sender_zipcode", "우편번호")}
             {field("sender_address", "주소")}
-        </div>
-
-        <div class="card">
-            <div class="field-group-title">기본 설정</div>
-            <label>기본 택배사</label>
-            <select name="default_carrier" style="width: 100%; padding: 12px; border: 1px solid #333; border-radius: 8px; background: #0f0f0f; color: #fff; margin-bottom: 16px;">
-                <option value="cj" {"selected" if creds.get("default_carrier") == "cj" else ""}>CJ대한통운</option>
-                <option value="hanjin" {"selected" if creds.get("default_carrier") == "hanjin" else ""}>한진택배</option>
-                <option value="lotte" {"selected" if creds.get("default_carrier") == "lotte" else ""}>롯데택배</option>
-                <option value="logen" {"selected" if creds.get("default_carrier") == "logen" else ""}>로젠택배</option>
-                <option value="epost" {"selected" if creds.get("default_carrier") == "epost" else ""}>우체국택배</option>
-            </select>
         </div>
 
         <button type="submit">저장</button>
@@ -733,7 +548,6 @@ async def settings_submit(request: Request, session: Optional[str] = Cookie(None
 
     form = await request.form()
     credentials = {k: v for k, v in form.items()}
-
     db.update_user_credentials(user_id, credentials)
     return RedirectResponse("/settings?success=저장되었습니다", status_code=303)
 
@@ -748,7 +562,6 @@ async def tokens_page(session: Optional[str] = Cookie(None)):
 
     tokens = db.get_user_tokens(user_id)
 
-    # 플래시 메시지에서 새 토큰 가져오기 + stale 정리
     flash = session_flash.pop(session, {}) if session else {}
     if len(session_flash) > 1000:
         session_flash.clear()
@@ -790,21 +603,18 @@ async def tokens_page(session: Optional[str] = Cookie(None)):
 
     content = f"""
     {new_token_html}
-
     <div class="card">
         <h2 style="margin-top: 0;">새 토큰 생성</h2>
         <form method="post" action="/tokens/create">
             <label>토큰 이름 (선택)</label>
-            <input type="text" name="name" placeholder="예: PlayMCP용">
+            <input type="text" name="name" placeholder="예: Claude Desktop용">
             <button type="submit">토큰 생성</button>
         </form>
     </div>
-
     <div class="card">
         <h2 style="margin-top: 0;">내 토큰</h2>
         {token_list}
     </div>
-
     <div class="card">
         <h2 style="margin-top: 0;">사용 방법</h2>
         <p style="color: #aaa; line-height: 1.8;">
@@ -823,7 +633,6 @@ async def create_token_submit(session: Optional[str] = Cookie(None), name: str =
     user_id = get_session_user(session)
     if not user_id:
         return RedirectResponse("/login", status_code=303)
-
     token = db.create_token(user_id, name or "default")
     if session:
         session_flash[session] = {"new_token": token}
@@ -835,7 +644,6 @@ async def delete_token_submit(session: Optional[str] = Cookie(None), token_id: i
     user_id = get_session_user(session)
     if not user_id:
         return RedirectResponse("/login", status_code=303)
-
     db.delete_token(token_id, user_id)
     return RedirectResponse("/tokens", status_code=303)
 

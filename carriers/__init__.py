@@ -1,2 +1,1 @@
-"""택배사 API 모듈"""
-from models import CarrierType
+"""택배사 API 모듈 - MVP: CJ대한통운만 지원"""
