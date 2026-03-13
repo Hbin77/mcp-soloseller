@@ -1,4 +1,5 @@
 """HTTP 기반 MCP 서버 (다중 사용자 지원) + 웹 UI"""
+import html
 import json
 import secrets
 import os
@@ -33,6 +34,8 @@ TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
 
 # 세션 저장소 (메모리 - 프로덕션에서는 Redis 등 사용 권장)
 sessions: dict[str, int] = {}
+# 세션별 플래시 메시지
+session_flash: dict[str, dict] = {}
 # 임시 회원가입 데이터 저장 (이메일 인증 전)
 pending_registrations: dict[str, dict] = {}
 
@@ -82,6 +85,18 @@ async def verify_turnstile(token: str) -> bool:
         return False
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """보안 헤더 추가 미들웨어"""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+
 class CredentialsMiddleware(BaseHTTPMiddleware):
     """HTTP 헤더에서 사용자 인증 정보를 추출하는 미들웨어"""
 
@@ -90,7 +105,11 @@ class CredentialsMiddleware(BaseHTTPMiddleware):
             headers = dict(request.headers)
             credentials = extract_credentials_auto(headers)
             set_credentials(credentials)
-        return await call_next(request)
+        try:
+            return await call_next(request)
+        finally:
+            if request.url.path.startswith("/mcp"):
+                set_credentials(None)
 
 
 app = FastAPI(
@@ -110,6 +129,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 app.add_middleware(CredentialsMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # 정적 파일 서빙
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -172,7 +192,7 @@ def render_page(title: str, content: str, user_id: Optional[int] = None) -> str:
     nav = ""
     if user_id:
         user = db.get_user_by_id(user_id)
-        email = user["email"] if user else ""
+        email = html.escape(user["email"]) if user else ""
         nav = f"""
         <div class="nav">
             <a href="/settings">API 설정</a>
@@ -413,8 +433,9 @@ async def mcp_endpoint(request: Request):
             media_type="application/json"
         )
     except Exception as e:
+        print(f"[MCP] Internal error: {e}")
         return Response(
-            content=json.dumps({"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)}, "id": jsonrpc_id}),
+            content=json.dumps({"jsonrpc": "2.0", "error": {"code": -32603, "message": "Internal server error"}, "id": jsonrpc_id}),
             media_type="application/json", status_code=500
         )
 
@@ -433,8 +454,8 @@ def get_turnstile_widget() -> str:
 
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(error: str = "", success: str = ""):
-    msg = f'<div class="error">{error}</div>' if error else ""
-    msg += f'<div class="success">{success}</div>' if success else ""
+    msg = f'<div class="error">{html.escape(error)}</div>' if error else ""
+    msg += f'<div class="success">{html.escape(success)}</div>' if success else ""
     turnstile = get_turnstile_widget()
     content = f"""
     {msg}
@@ -485,7 +506,7 @@ async def register_submit(
 
     # 임시 저장 (이메일 인증 후 계정 생성)
     reg_token = secrets.token_urlsafe(32)
-    pending_registrations[reg_token] = {"email": email, "password": password}
+    pending_registrations[reg_token] = {"email": email, "password_hash": db.hash_password(password)}
 
     return RedirectResponse(f"/verify-email?token={reg_token}&email={email}", status_code=303)
 
@@ -495,24 +516,26 @@ async def verify_email_page(token: str = "", email: str = "", error: str = ""):
     if not token or token not in pending_registrations:
         return RedirectResponse("/register?error=유효하지 않은 요청입니다", status_code=303)
 
-    msg = f'<div class="error">{error}</div>' if error else ""
+    safe_email = html.escape(email)
+    safe_token = html.escape(token)
+    msg = f'<div class="error">{html.escape(error)}</div>' if error else ""
     content = f"""
     {msg}
     <div class="card">
         <p style="margin-bottom: 20px; color: #aaa;">
-            <strong>{email}</strong>으로 인증 코드를 발송했습니다.<br>
+            <strong>{safe_email}</strong>으로 인증 코드를 발송했습니다.<br>
             이메일을 확인하고 6자리 코드를 입력해주세요.
         </p>
         <form method="post">
-            <input type="hidden" name="token" value="{token}">
-            <input type="hidden" name="email" value="{email}">
+            <input type="hidden" name="token" value="{safe_token}">
+            <input type="hidden" name="email" value="{safe_email}">
             <label>인증 코드</label>
             <input type="text" name="code" required placeholder="000000" maxlength="6"
                    style="font-size: 24px; letter-spacing: 8px; text-align: center;">
             <button type="submit">인증 확인</button>
         </form>
         <p style="margin-top: 20px; font-size: 14px; color: #888;">
-            코드를 받지 못하셨나요? <a href="/resend-code?token={token}&email={email}">다시 보내기</a>
+            코드를 받지 못하셨나요? <a href="/resend-code?token={safe_token}&email={safe_email}">다시 보내기</a>
         </p>
     </div>
     """
@@ -534,7 +557,7 @@ async def verify_email_submit(
 
     # 계정 생성
     reg_data = pending_registrations.pop(token)
-    user_id = db.create_user(reg_data["email"], reg_data["password"])
+    user_id = db.create_user_with_hash(reg_data["email"], reg_data["password_hash"])
 
     if not user_id:
         return RedirectResponse("/register?error=회원가입에 실패했습니다", status_code=303)
@@ -559,8 +582,8 @@ async def resend_code(token: str = "", email: str = ""):
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(error: str = "", success: str = ""):
-    msg = f'<div class="error">{error}</div>' if error else ""
-    msg += f'<div class="success">{success}</div>' if success else ""
+    msg = f'<div class="error">{html.escape(error)}</div>' if error else ""
+    msg += f'<div class="success">{html.escape(success)}</div>' if success else ""
     turnstile = get_turnstile_widget()
     content = f"""
     {msg}
@@ -601,12 +624,14 @@ async def login_submit(
 
     session_id = create_session(user_id)
     response = RedirectResponse("/settings", status_code=303)
-    response.set_cookie("session", session_id, httponly=True, max_age=86400*30)
+    response.set_cookie("session", session_id, httponly=True, secure=True, samesite="lax", max_age=86400*30)
     return response
 
 
 @app.get("/logout")
-async def logout():
+async def logout(session: Optional[str] = Cookie(None)):
+    if session:
+        sessions.pop(session, None)
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie("session")
     return response
@@ -621,10 +646,10 @@ async def settings_page(session: Optional[str] = Cookie(None), success: str = ""
         return RedirectResponse("/login", status_code=303)
 
     creds = db.get_user_credentials(user_id) or {}
-    msg = f'<div class="success">{success}</div>' if success else ""
+    msg = f'<div class="success">{html.escape(success)}</div>' if success else ""
 
     def field(name: str, label: str, type: str = "text"):
-        val = creds.get(name) or ""
+        val = html.escape(creds.get(name) or "", quote=True)
         return f'<label>{label}</label><input type="{type}" name="{name}" value="{val}">'
 
     content = f"""
@@ -707,7 +732,7 @@ async def settings_submit(request: Request, session: Optional[str] = Cookie(None
         return RedirectResponse("/login", status_code=303)
 
     form = await request.form()
-    credentials = {k: v for k, v in form.items() if v}
+    credentials = {k: v for k, v in form.items()}
 
     db.update_user_credentials(user_id, credentials)
     return RedirectResponse("/settings?success=저장되었습니다", status_code=303)
@@ -716,12 +741,18 @@ async def settings_submit(request: Request, session: Optional[str] = Cookie(None
 # ============ 웹 UI - 토큰 관리 ============
 
 @app.get("/tokens", response_class=HTMLResponse)
-async def tokens_page(session: Optional[str] = Cookie(None), new_token: str = ""):
+async def tokens_page(session: Optional[str] = Cookie(None)):
     user_id = get_session_user(session)
     if not user_id:
         return RedirectResponse("/login", status_code=303)
 
     tokens = db.get_user_tokens(user_id)
+
+    # 플래시 메시지에서 새 토큰 가져오기 + stale 정리
+    flash = session_flash.pop(session, {}) if session else {}
+    if len(session_flash) > 1000:
+        session_flash.clear()
+    new_token = flash.get("new_token", "")
 
     new_token_html = ""
     if new_token:
@@ -729,7 +760,7 @@ async def tokens_page(session: Optional[str] = Cookie(None), new_token: str = ""
         <div class="success">
             <strong>새 토큰이 생성되었습니다!</strong><br>
             <small>이 토큰은 다시 표시되지 않으니 안전한 곳에 저장하세요.</small>
-            <div class="token-box">{new_token}</div>
+            <div class="token-box">{html.escape(new_token)}</div>
         </div>
         """
 
@@ -741,7 +772,7 @@ async def tokens_page(session: Optional[str] = Cookie(None), new_token: str = ""
         token_list += f"""
         <div class="token-item">
             <div>
-                <div class="token-name">{t["name"]}</div>
+                <div class="token-name">{html.escape(t["name"])}</div>
                 <div class="token-meta">생성: {t["created_at"][:10]} | 마지막 사용: {last_used}</div>
             </div>
             <div>
@@ -794,7 +825,9 @@ async def create_token_submit(session: Optional[str] = Cookie(None), name: str =
         return RedirectResponse("/login", status_code=303)
 
     token = db.create_token(user_id, name or "default")
-    return RedirectResponse(f"/tokens?new_token={token}", status_code=303)
+    if session:
+        session_flash[session] = {"new_token": token}
+    return RedirectResponse("/tokens", status_code=303)
 
 
 @app.post("/tokens/delete")

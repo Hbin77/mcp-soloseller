@@ -2,12 +2,10 @@
 import sqlite3
 import hashlib
 import secrets
-import json
 import os
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from dataclasses import dataclass
 from contextlib import contextmanager
 
 DATABASE_PATH = os.environ.get("DATABASE_PATH", "data/users.db")
@@ -58,7 +56,8 @@ def init_database():
                 type TEXT DEFAULT 'register',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 expires_at TIMESTAMP NOT NULL,
-                used INTEGER DEFAULT 0
+                used INTEGER DEFAULT 0,
+                attempts INTEGER DEFAULT 0
             )
         """)
 
@@ -161,6 +160,25 @@ def create_user(email: str, password: str) -> Optional[int]:
         return None
 
 
+def create_user_with_hash(email: str, password_hash: str) -> Optional[int]:
+    """사용자 생성 (이미 해싱된 비밀번호 사용)"""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
+                (email, password_hash)
+            )
+            user_id = cursor.lastrowid
+            cursor.execute(
+                "INSERT INTO user_credentials (user_id) VALUES (?)",
+                (user_id,)
+            )
+            return user_id
+    except sqlite3.IntegrityError:
+        return None
+
+
 def authenticate_user(email: str, password: str) -> Optional[int]:
     """사용자 인증 - 성공시 user_id 반환"""
     with get_connection() as conn:
@@ -238,7 +256,7 @@ def update_user_credentials(user_id: int, credentials: dict) -> bool:
 def create_token(user_id: int, name: str = "default", expires_days: int = 365) -> str:
     """새 토큰 생성"""
     token = generate_token()
-    expires_at = datetime.now() + timedelta(days=expires_days)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
 
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -318,15 +336,14 @@ def get_credentials_by_token(token: str) -> Optional[dict]:
 # ============ 이메일 인증 ============
 
 def generate_verification_code() -> str:
-    """6자리 인증 코드 생성"""
-    import random
-    return ''.join([str(random.randint(0, 9)) for _ in range(6)])
+    """6자리 인증 코드 생성 (암호학적으로 안전한 방식)"""
+    return ''.join([str(secrets.randbelow(10)) for _ in range(6)])
 
 
 def create_verification_code(email: str, code_type: str = "register", expires_minutes: int = 10) -> str:
     """인증 코드 생성 및 저장"""
     code = generate_verification_code()
-    expires_at = datetime.now() + timedelta(minutes=expires_minutes)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
 
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -343,20 +360,34 @@ def create_verification_code(email: str, code_type: str = "register", expires_mi
     return code
 
 
-def verify_code(email: str, code: str, code_type: str = "register") -> bool:
-    """인증 코드 확인"""
+def verify_code(email: str, code: str, code_type: str = "register", max_attempts: int = 5) -> bool:
+    """인증 코드 확인 (최대 시도 횟수 제한)"""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            """SELECT id FROM verification_codes
-               WHERE email = ? AND code = ? AND type = ? AND used = 0
-               AND expires_at > CURRENT_TIMESTAMP""",
-            (email, code, code_type)
+            """SELECT id, code, attempts FROM verification_codes
+               WHERE email = ? AND type = ? AND used = 0
+               AND expires_at > CURRENT_TIMESTAMP
+               ORDER BY created_at DESC LIMIT 1""",
+            (email, code_type)
         )
         row = cursor.fetchone()
 
-        if row:
-            # 코드 사용 처리
+        if not row:
+            return False
+
+        # 시도 횟수 초과 확인
+        if row["attempts"] >= max_attempts:
+            cursor.execute("UPDATE verification_codes SET used = 1 WHERE id = ?", (row["id"],))
+            return False
+
+        # 시도 횟수 증가
+        cursor.execute(
+            "UPDATE verification_codes SET attempts = attempts + 1 WHERE id = ?",
+            (row["id"],)
+        )
+
+        if secrets.compare_digest(code, row["code"]):
             cursor.execute("UPDATE verification_codes SET used = 1 WHERE id = ?", (row["id"],))
             return True
         return False
@@ -388,5 +419,17 @@ def get_user_by_email(email: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+def migrate_database():
+    """기존 데이터베이스 마이그레이션"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        # verification_codes 테이블에 attempts 컬럼 추가 (기존 DB 호환)
+        try:
+            cursor.execute("ALTER TABLE verification_codes ADD COLUMN attempts INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # 이미 존재하는 경우 무시
+
+
 # 앱 시작 시 데이터베이스 초기화
 init_database()
+migrate_database()

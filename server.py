@@ -21,7 +21,7 @@ def main():
         import uvicorn
         from app import app
         print(f"HTTP 모드로 시작: http://{args.host}:{args.port}")
-        print("API 문서: http://{args.host}:{args.port}/docs")
+        print(f"API 문서: http://{args.host}:{args.port}/docs")
         uvicorn.run(app, host=args.host, port=args.port)
     else:
         # stdio 모드 (로컬 전용)
