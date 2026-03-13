@@ -16,7 +16,7 @@ class UserCredentials:
 
     # CJ대한통운
     cj_customer_id: Optional[str] = None
-    cj_api_key: Optional[str] = None
+    cj_biz_reg_num: Optional[str] = None
 
     # 발송인 정보
     sender_name: Optional[str] = None
@@ -30,7 +30,7 @@ class UserCredentials:
 
     @property
     def cj_configured(self) -> bool:
-        return bool(self.cj_customer_id and self.cj_api_key)
+        return bool(self.cj_customer_id and self.cj_biz_reg_num)
 
     @property
     def sender_configured(self) -> bool:
@@ -62,7 +62,7 @@ def extract_credentials_from_headers(headers: dict) -> UserCredentials:
         coupang_access_key=get_header("x-coupang-access-key"),
         coupang_secret_key=get_header("x-coupang-secret-key"),
         cj_customer_id=get_header("x-cj-customer-id"),
-        cj_api_key=get_header("x-cj-api-key"),
+        cj_biz_reg_num=get_header("x-cj-biz-reg-num"),
         sender_name=get_header("x-sender-name"),
         sender_phone=get_header("x-sender-phone"),
         sender_zipcode=get_header("x-sender-zipcode"),
@@ -77,7 +77,7 @@ AUTH_HEADERS_SPEC = {
         {"name": "X-Coupang-Access-Key", "description": "쿠팡 WING Access Key"},
         {"name": "X-Coupang-Secret-Key", "description": "쿠팡 WING Secret Key"},
         {"name": "X-Cj-Customer-Id", "description": "CJ대한통운 고객 ID"},
-        {"name": "X-Cj-Api-Key", "description": "CJ대한통운 API Key"},
+        {"name": "X-Cj-Biz-Reg-Num", "description": "CJ대한통운 사업자등록번호"},
         {"name": "X-Sender-Name", "description": "발송인 이름"},
         {"name": "X-Sender-Phone", "description": "발송인 연락처"},
         {"name": "X-Sender-Zipcode", "description": "발송인 우편번호"},
@@ -94,7 +94,7 @@ def credentials_from_db_row(row: dict) -> UserCredentials:
         coupang_access_key=row.get("coupang_access_key"),
         coupang_secret_key=row.get("coupang_secret_key"),
         cj_customer_id=row.get("cj_customer_id"),
-        cj_api_key=row.get("cj_api_key"),
+        cj_biz_reg_num=row.get("cj_biz_reg_num"),
         sender_name=row.get("sender_name"),
         sender_phone=row.get("sender_phone"),
         sender_zipcode=row.get("sender_zipcode"),

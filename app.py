@@ -523,7 +523,7 @@ async def settings_page(session: Optional[str] = Cookie(None), success: str = ""
         <div class="card">
             <div class="field-group-title">CJ대한통운</div>
             {field("cj_customer_id", "고객 ID")}
-            {field("cj_api_key", "API Key", "password")}
+            {field("cj_biz_reg_num", "사업자등록번호")}
         </div>
 
         <div class="card">

@@ -5,6 +5,9 @@ from auth import get_credentials
 from models import ShippingRequest
 from carriers.cj import CJClient
 
+# CJClient 인스턴스 캐시 (고객ID별, 토큰 24시간 캐싱 활용)
+_cj_clients: dict[str, CJClient] = {}
+
 
 async def issue_invoice(
     order_id: str,
@@ -22,10 +25,13 @@ async def issue_invoice(
     if not creds.sender_configured:
         return {"success": False, "error": "발송인 정보가 설정되지 않았습니다. https://soloseller.cloud/settings 에서 등록해주세요."}
 
-    client = CJClient(
-        customer_id=creds.cj_customer_id or "",
-        api_key=creds.cj_api_key or ""
-    )
+    cache_key = creds.cj_customer_id or ""
+    if cache_key not in _cj_clients:
+        _cj_clients[cache_key] = CJClient(
+            customer_id=creds.cj_customer_id or "",
+            biz_reg_num=creds.cj_biz_reg_num or "",
+        )
+    client = _cj_clients[cache_key]
 
     request = ShippingRequest(
         sender_name=creds.sender_name,
@@ -40,19 +46,16 @@ async def issue_invoice(
         order_id=order_id
     )
 
-    try:
-        response = await client.request_invoice(request)
-        result = {
-            "success": response.success,
-            "tracking_number": response.tracking_number,
-            "carrier": "CJ대한통운",
-            "error": response.error
-        }
-        if response.is_test:
-            result["warning"] = "테스트 모드 송장입니다. 실제 배송에 사용할 수 없습니다."
-        return result
-    finally:
-        await client.close()
+    response = await client.request_invoice(request)
+    result = {
+        "success": response.success,
+        "tracking_number": response.tracking_number,
+        "carrier": "CJ대한통운",
+        "error": response.error
+    }
+    if response.is_test:
+        result["warning"] = "테스트 모드 송장입니다. 실제 배송에 사용할 수 없습니다."
+    return result
 
 
 async def register_invoice(

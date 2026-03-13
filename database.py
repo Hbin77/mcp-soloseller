@@ -72,7 +72,7 @@ def init_database():
                 coupang_secret_key TEXT,
                 -- CJ대한통운
                 cj_customer_id TEXT,
-                cj_api_key TEXT,
+                cj_biz_reg_num TEXT,
                 -- 발송인 정보
                 sender_name TEXT,
                 sender_phone TEXT,
@@ -205,7 +205,7 @@ def update_user_credentials(user_id: int, credentials: dict) -> bool:
     """사용자 API 키 업데이트"""
     allowed_fields = [
         'coupang_vendor_id', 'coupang_access_key', 'coupang_secret_key',
-        'cj_customer_id', 'cj_api_key',
+        'cj_customer_id', 'cj_biz_reg_num',
         'sender_name', 'sender_phone', 'sender_zipcode', 'sender_address'
     ]
 
@@ -404,6 +404,12 @@ def migrate_database():
             cursor.execute("ALTER TABLE verification_codes ADD COLUMN attempts INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # 이미 존재하는 경우 무시
+
+        # cj_api_key → cj_biz_reg_num 마이그레이션
+        try:
+            cursor.execute("ALTER TABLE user_credentials RENAME COLUMN cj_api_key TO cj_biz_reg_num")
+        except sqlite3.OperationalError:
+            pass  # 이미 변경되었거나 컬럼이 없는 경우 무시
 
 
 # 앱 시작 시 데이터베이스 초기화

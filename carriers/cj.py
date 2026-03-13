@@ -1,129 +1,245 @@
-"""CJ대한통운 API 클라이언트
+"""CJ대한통운 DX API 클라이언트
 
-NOTE: CJ대한통운 API는 비공개 B2B API입니다.
-아래 엔드포인트와 인증 방식은 추정값이며, 실제 API Portal에서
-스펙을 확인한 후 수정이 필요합니다.
-
-실제 연동 시: https://openapi.cjlogistics.com/ 에서 API 문서 확인
+CJ Logistics DX API 연동:
+- 인증: ReqOneDayToken → 24시간 유효 토큰
+- 운송장 발급: ReqInvcNo
+- 접수: RegBook
 """
+import re
 import httpx
-import hashlib
-import hmac
-import time
-import json
-import os
 import secrets
-from datetime import datetime
-from typing import Optional
+import structlog
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Tuple
 
 from models import ShippingRequest, ShippingResponse
 
+logger = structlog.get_logger()
+
+BASE_URL_TEST = "https://dxapi-dev.cjlogistics.com:5054"
+BASE_URL_PROD = "https://dxapi.cjlogistics.com:5052"
+
 
 class CJClient:
-    """CJ대한통운 API 클라이언트"""
-
-    # NOTE: 실제 API URL은 CJ API Portal에서 확인 필요
-    BASE_URL = "https://api.cjlogistics.com"
+    """CJ대한통운 DX API 클라이언트"""
 
     def __init__(
         self,
         customer_id: str,
-        api_key: str,
-        test_mode: Optional[bool] = None
+        biz_reg_num: str,
+        test_mode: bool = True,
     ):
         self.customer_id = customer_id
-        self.api_key = api_key
-        # test_mode: 명시적으로 지정하지 않으면 API 키 유무로 판단
-        if test_mode is not None:
-            self.test_mode = test_mode
-        else:
-            self.test_mode = not api_key or os.environ.get("CJ_TEST_MODE", "").lower() == "true"
+        self.biz_reg_num = biz_reg_num
+        self.test_mode = test_mode
+        self.base_url = BASE_URL_TEST if test_mode else BASE_URL_PROD
         self.http_client = httpx.AsyncClient(timeout=30.0)
 
-    def _generate_signature(self, timestamp: str, data: str = "") -> str:
-        """API 서명 생성 (NOTE: 실제 인증 방식은 확인 필요)"""
-        message = f"{self.customer_id}{timestamp}{data}"
-        signature = hmac.new(
-            self.api_key.encode('utf-8'),
-            message.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-        return signature
+        # Token cache
+        self._token: Optional[str] = None
+        self._token_expires: Optional[datetime] = None
 
-    def _get_headers(self, data: str = "") -> dict:
-        """API 요청 헤더"""
-        timestamp = str(int(time.time() * 1000))
-        signature = self._generate_signature(timestamp, data)
-        return {
-            "Content-Type": "application/json",
-            "X-Customer-Id": self.customer_id,
-            "X-Timestamp": timestamp,
-            "X-Signature": signature,
+    @staticmethod
+    def _split_phone(phone: str) -> Tuple[str, str, str]:
+        """전화번호를 3분할. '010-3508-4959', '01035084959', '02-1234-5678' 등 처리"""
+        digits = re.sub(r"[^0-9]", "", phone)
+        if len(digits) < 9:
+            return digits, "", ""
+        # 서울 02 지역번호
+        if digits.startswith("02"):
+            return digits[:2], digits[2:-4], digits[-4:]
+        # 3-4-4 or 3-3-4 패턴
+        return digits[:3], digits[3:-4], digits[-4:]
+
+    @staticmethod
+    def _split_address(address: str) -> Tuple[str, str]:
+        """주소를 기본주소 + 상세주소로 분리"""
+        # 시/구/군/동/읍/면/리 뒤의 공백에서 분리 시도
+        match = re.search(r"(.*?(?:시|구|군|동|읍|면|리|로|길)\s+\S+)\s+(.*)", address)
+        if match:
+            return match.group(1), match.group(2)
+        # 패턴 매칭 실패시 절반으로 분리
+        mid = len(address) // 2
+        space_idx = address.find(" ", mid)
+        if space_idx == -1:
+            return address, ""
+        return address[:space_idx], address[space_idx + 1:]
+
+    async def _get_token(self) -> str:
+        """토큰 획득 (23시간 TTL 캐싱)"""
+        now = datetime.now(timezone.utc)
+        if self._token and self._token_expires and now < self._token_expires:
+            return self._token
+
+        logger.info("cj.requesting_token", customer_id=self.customer_id)
+        resp = await self.http_client.post(
+            f"{self.base_url}/ReqOneDayToken",
+            json={
+                "DATA": {
+                    "CUST_ID": self.customer_id,
+                    "BIZ_REG_NUM": self.biz_reg_num,
+                }
+            },
+            headers={"Content-Type": "application/json"},
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+        if body.get("RESULT_CD") != "S":
+            detail = body.get("RESULT_DETAIL", body.get("RESULT_MSG", "알 수 없는 오류"))
+            raise RuntimeError(f"토큰 발급 실패: {detail}")
+
+        data = body.get("DATA") or {}
+        self._token = data.get("TOKEN_NUM")
+        if not self._token:
+            raise RuntimeError("토큰 발급 응답에 TOKEN_NUM이 없습니다")
+        self._token_expires = now + timedelta(hours=23)
+        logger.info("cj.token_acquired", expires=self._token_expires.isoformat())
+        return self._token
+
+    async def _request_invoice_number(self, token: str) -> str:
+        """운송장 번호 발급"""
+        logger.info("cj.requesting_invoice_number")
+        resp = await self.http_client.post(
+            f"{self.base_url}/ReqInvcNo",
+            json={
+                "DATA": {
+                    "CLNTNUM": self.customer_id,
+                    "TOKEN_NUM": token,
+                }
+            },
+            headers={
+                "Content-Type": "application/json",
+                "CJ-Gateway-APIKey": token,
+            },
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+        if body.get("RESULT_CD") != "S":
+            detail = body.get("RESULT_DETAIL", body.get("RESULT_MSG", "알 수 없는 오류"))
+            raise RuntimeError(f"운송장 번호 발급 실패: {detail}")
+
+        data = body.get("DATA") or {}
+        invoice_no = data.get("INVC_NO")
+        if not invoice_no:
+            raise RuntimeError("운송장 번호 응답에 INVC_NO가 없습니다")
+        logger.info("cj.invoice_number_acquired", invoice_no=invoice_no)
+        return invoice_no
+
+    async def _register_booking(
+        self, token: str, invoice_no: str, request: ShippingRequest
+    ) -> None:
+        """접수 등록 (RegBook)"""
+        today = datetime.now().strftime("%Y%m%d")
+        order_id = request.order_id or f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        mpck_key = f"{today}_{self.customer_id}_{order_id}"
+
+        s1, s2, s3 = self._split_phone(request.sender_phone)
+        r1, r2, r3 = self._split_phone(request.receiver_phone)
+        s_addr, s_detail = self._split_address(request.sender_address)
+        r_addr, r_detail = self._split_address(request.receiver_address)
+
+        payload = {
+            "DATA": {
+                "CUST_ID": self.customer_id,
+                "TOKEN_NUM": token,
+                "RCPT_YMD": today,
+                "CUST_USE_NO": order_id,
+                "RCPT_DV": "01",
+                "WORK_DV_CD": "01",
+                "REQ_DV_CD": "01",
+                "MPCK_KEY": mpck_key,
+                "CAL_DV_CD": "2",
+                "FRT_DV_CD": "03",
+                "CNTR_ITEM_CD": "01",
+                "BOX_TYPE_CD": "02",
+                "BOX_QTY": "1",
+                "SENDR_NM": request.sender_name,
+                "SENDR_TEL_NO1": s1,
+                "SENDR_TEL_NO2": s2,
+                "SENDR_TEL_NO3": s3,
+                "SENDR_CELL_NO1": s1,
+                "SENDR_CELL_NO2": s2,
+                "SENDR_CELL_NO3": s3,
+                "SENDR_ZIP_NO": request.sender_zipcode,
+                "SENDR_ADDR": s_addr,
+                "SENDR_DETAIL_ADDR": s_detail,
+                "RCVR_NM": request.receiver_name,
+                "RCVR_TEL_NO1": r1,
+                "RCVR_TEL_NO2": r2,
+                "RCVR_TEL_NO3": r3,
+                "RCVR_CELL_NO1": r1,
+                "RCVR_CELL_NO2": r2,
+                "RCVR_CELL_NO3": r3,
+                "RCVR_ZIP_NO": request.receiver_zipcode,
+                "RCVR_ADDR": r_addr,
+                "RCVR_DETAIL_ADDR": r_detail,
+                "INVC_NO": invoice_no,
+                "ARRAY": [
+                    {
+                        "MPCK_SEQ": "1",
+                        "GDS_NM": request.product_name,
+                        "GDS_QTY": str(request.quantity),
+                    }
+                ],
+            }
         }
 
+        logger.info("cj.registering_booking", invoice_no=invoice_no, order_id=order_id)
+        resp = await self.http_client.post(
+            f"{self.base_url}/RegBook",
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "CJ-Gateway-APIKey": token,
+            },
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+        if body.get("RESULT_CD") != "S":
+            raise RuntimeError(f"접수 등록 실패: {body.get('RESULT_DETAIL', body.get('RESULT_MSG', body))}")
+
+        logger.info("cj.booking_registered", invoice_no=invoice_no)
+
     async def request_invoice(self, request: ShippingRequest) -> ShippingResponse:
-        """송장 발급"""
-        if self.test_mode:
+        """송장 발급 (토큰 → 운송장번호 → 접수 등록)"""
+        # Test mode: customer_id나 biz_reg_num이 없으면 테스트 송장
+        if not self.customer_id or not self.biz_reg_num:
             return self._test_invoice(request)
 
         try:
-            payload = {
-                "senderName": request.sender_name,
-                "senderPhone": request.sender_phone,
-                "senderZipcode": request.sender_zipcode,
-                "senderAddress": request.sender_address,
-                "receiverName": request.receiver_name,
-                "receiverPhone": request.receiver_phone,
-                "receiverZipcode": request.receiver_zipcode,
-                "receiverAddress": request.receiver_address,
-                "productName": request.product_name,
-                "quantity": request.quantity,
-                "weight": request.weight,
-                "memo": request.memo or "",
-                "orderId": request.order_id or ""
-            }
-
-            data_str = json.dumps(payload, ensure_ascii=False)
-            headers = self._get_headers(data_str)
-
-            response = await self.http_client.post(
-                f"{self.BASE_URL}/v1/invoice/create",
-                headers=headers,
-                json=payload
-            )
-
-            if response.status_code in [200, 201]:
-                result = response.json()
-                tracking_number = result.get("trackingNumber") or result.get("invoiceNo")
-                return ShippingResponse(
-                    success=True,
-                    tracking_number=tracking_number
-                )
-            else:
-                error_detail = response.text[:200] if response.text else f"HTTP {response.status_code}"
-                return ShippingResponse(
-                    success=False,
-                    error=f"CJ API 오류: {error_detail}"
-                )
-
-        except httpx.ConnectError:
+            token = await self._get_token()
+            invoice_no = await self._request_invoice_number(token)
+            await self._register_booking(token, invoice_no, request)
+            return ShippingResponse(success=True, tracking_number=invoice_no)
+        except (httpx.ConnectError, httpx.TimeoutException):
             return ShippingResponse(
                 success=False,
-                error="CJ API 서버에 연결할 수 없습니다. 네트워크를 확인하세요."
+                error="CJ DX API 서버에 연결할 수 없습니다. 네트워크를 확인하세요.",
             )
+        except httpx.HTTPStatusError as e:
+            return ShippingResponse(
+                success=False,
+                error=f"CJ API 서버 오류 (HTTP {e.response.status_code})",
+            )
+        except RuntimeError as e:
+            return ShippingResponse(success=False, error=str(e))
         except Exception as e:
+            logger.exception("cj.unexpected_error")
             return ShippingResponse(
                 success=False,
-                error=f"CJ 송장 발급 중 오류 발생: {str(e)}"
+                error=f"CJ 송장 발급 중 오류 발생: {str(e)}",
             )
 
     def _test_invoice(self, request: ShippingRequest) -> ShippingResponse:
-        """테스트 송장 발급 (명시적 테스트 모드)"""
+        """테스트 송장 발급"""
         tracking_number = f"TEST-{datetime.now().strftime('%Y%m%d%H%M%S')}-{secrets.randbelow(10000):04d}"
         return ShippingResponse(
             success=True,
             tracking_number=tracking_number,
-            is_test=True
+            is_test=True,
         )
 
     async def close(self):
