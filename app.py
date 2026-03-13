@@ -753,7 +753,10 @@ async def api_dashboard_process(request: Request, session: Optional[str] = Cooki
     user_id, err = _dashboard_auth(request, session)
     if err:
         return err
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return {"success": False, "error": "잘못된 요청입니다."}
     dry_run = body.get("dry_run", True)
     from auth import set_credentials
     try:
@@ -778,22 +781,25 @@ async def api_dashboard_automation(request: Request, session: Optional[str] = Co
     user_id, err = _dashboard_auth(request, session)
     if err:
         return err
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return {"success": False, "error": "잘못된 요청입니다."}
     enabled = bool(body.get("enabled", False))
-    interval = int(body.get("interval_minutes", 60))
-    if interval < 10:
-        interval = 10
+    try:
+        interval = int(body.get("interval_minutes", 60))
+    except (ValueError, TypeError):
+        return {"success": False, "error": "interval_minutes는 숫자여야 합니다."}
+    interval = max(10, min(interval, 1440))
     db.update_automation_settings(user_id, enabled, interval)
     return {"success": True, "enabled": enabled, "interval_minutes": interval}
 
 
 @app.get("/api/dashboard/automation")
 async def api_get_automation(request: Request, session: Optional[str] = Cookie(None)):
-    if request.headers.get("X-Requested-With") != "SoloSeller":
-        return {"success": False, "error": "잘못된 요청입니다."}
-    user_id = get_session_user(session)
-    if not user_id:
-        return {"success": False, "error": "로그인이 필요합니다."}
+    user_id, err = _dashboard_auth(request, session)
+    if err:
+        return err
     settings = db.get_automation_settings(user_id)
     return {"success": True, **(settings or {"enabled": False, "interval_minutes": 60})}
 

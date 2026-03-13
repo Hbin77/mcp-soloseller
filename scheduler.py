@@ -82,8 +82,9 @@ async def cron_tick():
                 elapsed = (now - last_run_dt).total_seconds() / 60
                 if elapsed < interval:
                     continue
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("cron.bad_last_run", user_id=user_id, error=str(e))
+                continue
 
         await run_cron_for_user(user_id)
 
