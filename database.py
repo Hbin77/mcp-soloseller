@@ -84,6 +84,36 @@ def init_database():
             )
         """)
 
+        # 자동화 설정 테이블
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS automation_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE NOT NULL,
+                enabled INTEGER DEFAULT 0,
+                interval_minutes INTEGER DEFAULT 60,
+                last_run_at TIMESTAMP,
+                last_result TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+        # 처리 로그 테이블
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS processing_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                trigger_type TEXT DEFAULT 'manual',
+                total_orders INTEGER DEFAULT 0,
+                processed INTEGER DEFAULT 0,
+                failed INTEGER DEFAULT 0,
+                result_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
         # 토큰 테이블
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tokens (
@@ -393,6 +423,64 @@ def get_user_by_email(email: str) -> Optional[dict]:
         cursor.execute("SELECT id, email, email_verified, created_at FROM users WHERE email = ?", (email,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+# ============ 자동화 설정 ============
+
+def get_automation_settings(user_id: int) -> Optional[dict]:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM automation_settings WHERE user_id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_automation_settings(user_id: int, enabled: bool, interval_minutes: int = 60):
+    with get_connection() as conn:
+        existing = conn.execute("SELECT id FROM automation_settings WHERE user_id = ?", (user_id,)).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE automation_settings SET enabled = ?, interval_minutes = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                (1 if enabled else 0, interval_minutes, user_id)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO automation_settings (user_id, enabled, interval_minutes) VALUES (?, ?, ?)",
+                (user_id, 1 if enabled else 0, interval_minutes)
+            )
+
+
+def update_automation_last_run(user_id: int, result_summary: str):
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE automation_settings SET last_run_at = CURRENT_TIMESTAMP, last_result = ? WHERE user_id = ?",
+            (result_summary, user_id)
+        )
+
+
+def get_all_enabled_automations() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT a.*, u.email FROM automation_settings a JOIN users u ON a.user_id = u.id WHERE a.enabled = 1"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ============ 처리 로그 ============
+
+def create_processing_log(user_id: int, trigger_type: str, total: int, processed: int, failed: int, result_json: str):
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO processing_logs (user_id, trigger_type, total_orders, processed, failed, result_json) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, trigger_type, total, processed, failed, result_json)
+        )
+
+
+def get_processing_logs(user_id: int, limit: int = 20) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM processing_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def migrate_database():

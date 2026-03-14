@@ -24,7 +24,9 @@ TURNSTILE_SITE_KEY = os.environ.get("TURNSTILE_SITE_KEY", "")
 TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
 
 # 세션 저장소 (메모리 - 프로덕션에서는 Redis 등 사용 권장)
+MAX_SESSIONS = 10000
 sessions: dict[str, int] = {}
+session_csrf: dict[str, str] = {}
 session_flash: dict[str, dict] = {}
 pending_registrations: dict[str, dict] = {}
 
@@ -36,9 +38,29 @@ def get_session_user(session_id: Optional[str]) -> Optional[int]:
 
 
 def create_session(user_id: int) -> str:
+    if len(sessions) >= MAX_SESSIONS:
+        # 가장 오래된 세션 절반 제거
+        to_remove = list(sessions.keys())[:MAX_SESSIONS // 2]
+        for k in to_remove:
+            sessions.pop(k, None)
+            session_csrf.pop(k, None)
     session_id = secrets.token_urlsafe(32)
     sessions[session_id] = user_id
+    session_csrf[session_id] = secrets.token_urlsafe(32)
     return session_id
+
+
+def get_csrf_token(session_id: Optional[str]) -> str:
+    if session_id and session_id in session_csrf:
+        return session_csrf[session_id]
+    return ""
+
+
+def verify_csrf(session_id: Optional[str], token: str) -> bool:
+    expected = get_csrf_token(session_id)
+    if not expected:
+        return False
+    return secrets.compare_digest(expected, token)
 
 
 async def verify_turnstile(token: str) -> bool:
@@ -63,6 +85,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; "
+            "style-src 'self' 'unsafe-inline'; "
+            "frame-src https://challenges.cloudflare.com; "
+            "connect-src 'self'"
+        )
         return response
 
 
@@ -79,10 +108,20 @@ class CredentialsMiddleware(BaseHTTPMiddleware):
                 set_credentials(None)
 
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    from scheduler import start_scheduler, stop_scheduler
+    start_scheduler()
+    yield
+    stop_scheduler()
+
 app = FastAPI(
     title="SoloSeller MCP Server",
     description="쿠팡 주문 관리 및 CJ대한통운 송장 자동화 MCP 서버",
-    version="2.0.0-mvp"
+    version="2.1.0",
+    lifespan=lifespan,
 )
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://soloseller.cloud").split(",")
@@ -396,6 +435,8 @@ async def register_submit(request: Request, email: str = Form(...), password: st
     if not send_verification_email(email, code):
         return RedirectResponse("/register?error=인증 이메일 발송에 실패했습니다", status_code=303)
 
+    if len(pending_registrations) >= 1000:
+        pending_registrations.clear()
     reg_token = secrets.token_urlsafe(32)
     pending_registrations[reg_token] = {"email": email, "password_hash": db.hash_password(password)}
 
@@ -520,45 +561,91 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
     coupang_ok = all(creds.get(k) for k in ["coupang_vendor_id", "coupang_access_key", "coupang_secret_key"])
     cj_ok = all(creds.get(k) for k in ["cj_customer_id", "cj_biz_reg_num"])
     sender_ok = all(creds.get(k) for k in ["sender_name", "sender_phone", "sender_address"])
-
-    status_items = ""
-    for label, ok in [("쿠팡 API", coupang_ok), ("CJ대한통운", cj_ok), ("발송인 정보", sender_ok)]:
-        icon = "✅" if ok else "❌"
-        status_items += f'<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #222;"><span>{label}</span><span>{icon}</span></div>'
-
     all_ok = coupang_ok and cj_ok and sender_ok
-    action_disabled = "" if all_ok else "disabled style='opacity:0.5;cursor:not-allowed;'"
 
+    auto = db.get_automation_settings(user_id) or {}
+    auto_enabled = "checked" if auto.get("enabled") else ""
+    auto_interval = auto.get("interval_minutes", 60)
+    auto_last_run = auto.get("last_run_at", "")
+    auto_last_result = auto.get("last_result", "")
+
+    def interval_selected(val):
+        return "selected" if auto_interval == val else ""
+
+    setup_msg = ""
     if not all_ok:
-        setup_msg = '<div class="error" style="margin-top:16px;">모든 설정을 완료해야 주문 처리를 사용할 수 있습니다. <a href="/settings" style="color:#fca5a5;">설정하기 →</a></div>'
-    else:
-        setup_msg = ""
+        setup_msg = '<div class="error" style="margin-top:12px;">설정을 완료해야 사용할 수 있습니다. <a href="/settings" style="color:#fca5a5;">설정하기 →</a></div>'
+
+    dis = "" if all_ok else "disabled style='opacity:0.4;pointer-events:none;'"
 
     content = f"""
+    <!-- 연동 상태 -->
     <div class="card">
-        <div class="field-group-title">연동 상태</div>
-        {status_items}
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="field-group-title" style="margin:0;">연동 상태</div>
+            <span style="font-size:13px;color:{'#86efac' if all_ok else '#fca5a5'};">{'모두 연동됨' if all_ok else '설정 필요'}</span>
+        </div>
+        <div style="margin-top:12px;">
+            {''.join(f'<span style="display:inline-block;padding:4px 12px;border-radius:20px;font-size:13px;margin:4px;background:{chr(35)}14532d;color:{chr(35)}86efac;" >✓ {l}</span>' if ok else f'<span style="display:inline-block;padding:4px 12px;border-radius:20px;font-size:13px;margin:4px;background:{chr(35)}7f1d1d;color:{chr(35)}fca5a5;">✗ {l}</span>' for l, ok in [("쿠팡", coupang_ok), ("CJ대한통운", cj_ok), ("발송인", sender_ok)])}
+        </div>
         {setup_msg}
     </div>
 
-    <div class="card">
-        <div class="field-group-title">주문 처리</div>
-        <p style="color:#aaa;margin-bottom:16px;font-size:14px;">쿠팡 신규 주문을 조회하고, CJ대한통운 송장을 발급하고, 쿠팡에 자동 등록합니다.</p>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <button onclick="fetchOrders()" {action_disabled}>📦 주문 조회</button>
-            <button onclick="processAll(true)" {action_disabled}>👁 미리보기</button>
-            <button onclick="if(confirm('모든 신규 주문에 송장을 발급하고 쿠팡에 등록합니다. 진행하시겠습니까?'))processAll(false)" {action_disabled} style="background:#22c55e;">🚀 일괄 처리</button>
+    <!-- 자동화 -->
+    <div class="card" {dis}>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="field-group-title" style="margin:0;">자동 처리</div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;">
+                <input type="checkbox" id="auto-toggle" {auto_enabled} onchange="toggleAuto()" style="width:18px;height:18px;">
+                <span style="font-size:13px;" id="auto-label">{('ON' if auto_enabled else 'OFF')}</span>
+            </label>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+            <select id="auto-interval" onchange="updateInterval()" style="padding:8px 12px;border-radius:8px;background:#0f0f0f;color:#fff;border:1px solid #333;font-size:13px;">
+                <option value="30" {interval_selected(30)}>30분마다</option>
+                <option value="60" {interval_selected(60)}>1시간마다</option>
+                <option value="120" {interval_selected(120)}>2시간마다</option>
+                <option value="240" {interval_selected(240)}>4시간마다</option>
+            </select>
+            <span style="font-size:12px;color:#888;" id="auto-status">
+                {'마지막: ' + html.escape(str(auto_last_run)[:16] + ' — ' + str(auto_last_result)) if auto_last_run else '아직 실행 기록 없음'}
+            </span>
         </div>
     </div>
 
-    <div id="result-area" class="card" style="display:none;">
-        <div class="field-group-title">결과</div>
-        <div id="result-content" style="font-size:14px;"></div>
+    <!-- 주문 조회 + 처리 -->
+    <div class="card" {dis}>
+        <div class="field-group-title">주문 처리</div>
+        <p style="color:#aaa;margin-bottom:16px;font-size:13px;">쿠팡 신규 주문 조회 → CJ대한통운 송장 발급 → 쿠팡 송장 등록</p>
+        <div id="orders-table" style="margin-bottom:16px;"><p style="color:#666;font-size:13px;">로딩 중...</p></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button onclick="fetchOrders()" style="background:#333;">새로고침</button>
+            <button onclick="processConfirm()" style="background:#22c55e;" id="process-btn">일괄 처리</button>
+        </div>
+    </div>
+
+    <!-- 처리 내역 -->
+    <div class="card">
+        <div class="field-group-title">처리 내역</div>
+        <div id="logs-area" style="font-size:13px;"><p style="color:#666;">로딩 중...</p></div>
+    </div>
+
+    <!-- 확인 모달 -->
+    <div id="confirm-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:100;align-items:center;justify-content:center;">
+        <div style="background:#1a1a1a;border-radius:12px;padding:32px;max-width:400px;margin:auto;margin-top:20vh;text-align:center;">
+            <p style="font-size:16px;margin-bottom:8px;">일괄 처리를 시작합니다</p>
+            <p style="color:#aaa;font-size:13px;margin-bottom:24px;" id="confirm-msg">모든 신규 주문에 송장을 발급하고 쿠팡에 등록합니다.</p>
+            <div style="display:flex;gap:10px;justify-content:center;">
+                <button onclick="closeModal()" style="background:#333;">취소</button>
+                <button onclick="doProcess()" style="background:#22c55e;">확인</button>
+            </div>
+        </div>
     </div>
 
     <script>
-    const API_BASE = '';
-    async function apiCall(action, body={{}}) {{
+    function esc(s) {{ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }}
+
+    async function api(action, body={{}}) {{
         const res = await fetch('/api/dashboard/' + action, {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json', 'X-Requested-With': 'SoloSeller'}},
@@ -567,48 +654,84 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
         return await res.json();
     }}
 
-    function esc(s) {{ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }}
-
-    function showResult(data) {{
-        const area = document.getElementById('result-area');
-        const content = document.getElementById('result-content');
-        area.style.display = 'block';
-        if (!data.success && data.error) {{
-            content.innerHTML = '<div class="error">' + esc(data.error) + '</div>';
-            return;
-        }}
-        let html = '';
-        if (data.orders && data.orders.length > 0) {{
-            html += '<table style="width:100%;font-size:13px;"><tr style="color:#888;text-align:left;"><th style="padding:8px;">주문ID</th><th>수령인</th><th>상품</th><th>상태</th></tr>';
-            data.orders.forEach(o => {{
-                const status = o.status || (o.tracking_number ? '✅ ' + esc(o.tracking_number) : '대기');
-                html += '<tr style="border-top:1px solid #222;"><td style="padding:8px;font-family:monospace;font-size:12px;">' + esc(o.order_id) + '</td><td>' + esc(o.receiver_name) + '</td><td>' + esc(o.product_summary || o.product_name || '') + '</td><td>' + status + '</td></tr>';
-            }});
-            html += '</table>';
-        }} else if (data.results && data.results.length > 0) {{
-            html += '<table style="width:100%;font-size:13px;"><tr style="color:#888;text-align:left;"><th style="padding:8px;">주문ID</th><th>송장번호</th><th>상태</th></tr>';
-            data.results.forEach(r => {{
-                const st = r.status === '완료' ? '✅ 완료' : r.status === '테스트' ? '⚠️ 테스트' : '❌ ' + esc(r.error||r.status);
-                html += '<tr style="border-top:1px solid #222;"><td style="padding:8px;font-family:monospace;font-size:12px;">' + esc(r.order_id) + '</td><td style="font-family:monospace;">' + esc(r.tracking_number||'-') + '</td><td>' + st + '</td></tr>';
-            }});
-            html += '</table>';
-        }}
-        if (data.message) html = '<p style="margin-bottom:12px;">' + esc(data.message) + '</p>' + html;
-        if (data.total !== undefined) html += '<p style="margin-top:12px;color:#888;">총 ' + data.total + '건' + (data.processed !== undefined ? ' | 처리 ' + data.processed + '건' : '') + (data.failed ? ' | 실패 ' + data.failed + '건' : '') + '</p>';
-        content.innerHTML = html || '<p style="color:#888;">처리할 주문이 없습니다.</p>';
+    // 주문 테이블
+    function renderOrders(data) {{
+        const el = document.getElementById('orders-table');
+        if (!data.success && data.error) {{ el.innerHTML = '<div class="error">' + esc(data.error) + '</div>'; return; }}
+        const orders = data.orders || [];
+        if (orders.length === 0) {{ el.innerHTML = '<p style="color:#666;font-size:13px;">신규 주문이 없습니다.</p>'; return; }}
+        let h = '<table style="width:100%;font-size:13px;border-collapse:collapse;"><tr style="color:#888;"><th style="text-align:left;padding:8px;">주문번호</th><th style="text-align:left;">수령인</th><th style="text-align:left;">상품</th></tr>';
+        orders.forEach(o => {{
+            const items = o.items || [];
+            const pname = items.length > 0 ? (items[0].product_name || '상품') : '상품';
+            h += '<tr style="border-top:1px solid #222;"><td style="padding:8px;font-family:monospace;font-size:12px;">' + esc(o.order_id||'') + '</td><td>' + esc(o.receiver_name||'') + '</td><td>' + esc(pname) + '</td></tr>';
+        }});
+        h += '</table><p style="margin-top:8px;color:#888;font-size:12px;">' + orders.length + '건의 신규 주문</p>';
+        el.innerHTML = h;
     }}
 
     async function fetchOrders() {{
-        showResult({{message: '조회 중...'}});
-        const data = await apiCall('orders');
-        showResult(data);
+        document.getElementById('orders-table').innerHTML = '<p style="color:#666;font-size:13px;">조회 중...</p>';
+        renderOrders(await api('orders'));
     }}
 
-    async function processAll(dryRun) {{
-        showResult({{message: dryRun ? '미리보기 조회 중...' : '처리 중... 잠시 기다려주세요.'}});
-        const data = await apiCall('process', {{dry_run: dryRun}});
-        showResult(data);
+    // 처리
+    function processConfirm() {{ document.getElementById('confirm-modal').style.display = 'flex'; }}
+    function closeModal() {{ document.getElementById('confirm-modal').style.display = 'none'; }}
+
+    async function doProcess() {{
+        closeModal();
+        document.getElementById('process-btn').textContent = '처리 중...';
+        document.getElementById('process-btn').disabled = true;
+        const data = await api('process', {{dry_run: false}});
+        document.getElementById('process-btn').textContent = '일괄 처리';
+        document.getElementById('process-btn').disabled = false;
+        if (data.results) {{
+            let h = '<table style="width:100%;font-size:13px;"><tr style="color:#888;"><th style="text-align:left;padding:8px;">주문</th><th>송장번호</th><th>상태</th></tr>';
+            data.results.forEach(r => {{
+                const st = r.status === '완료' ? '<span style="color:#86efac;">완료</span>' : '<span style="color:#fca5a5;">' + esc(r.error || r.status) + '</span>';
+                h += '<tr style="border-top:1px solid #222;"><td style="padding:8px;font-size:12px;">' + esc(r.order_id) + '</td><td style="font-family:monospace;">' + esc(r.tracking_number||'-') + '</td><td>' + st + '</td></tr>';
+            }});
+            h += '</table><p style="color:#888;font-size:12px;margin-top:8px;">총 ' + (data.total||0) + '건 | 성공 ' + (data.processed||0) + '건 | 실패 ' + (data.failed||0) + '건</p>';
+            document.getElementById('orders-table').innerHTML = h;
+        }} else {{
+            document.getElementById('orders-table').innerHTML = '<p style="color:#888;font-size:13px;">' + esc(data.message || '완료') + '</p>';
+        }}
+        loadLogs();
     }}
+
+    // 자동화
+    async function toggleAuto() {{
+        const enabled = document.getElementById('auto-toggle').checked;
+        const interval = parseInt(document.getElementById('auto-interval').value);
+        document.getElementById('auto-label').textContent = enabled ? 'ON' : 'OFF';
+        await api('automation', {{enabled, interval_minutes: interval}});
+    }}
+    async function updateInterval() {{
+        const enabled = document.getElementById('auto-toggle').checked;
+        const interval = parseInt(document.getElementById('auto-interval').value);
+        await api('automation', {{enabled, interval_minutes: interval}});
+    }}
+
+    // 로그
+    async function loadLogs() {{
+        const data = await api('logs');
+        const el = document.getElementById('logs-area');
+        const logs = data.logs || [];
+        if (logs.length === 0) {{ el.innerHTML = '<p style="color:#666;">아직 처리 내역이 없습니다.</p>'; return; }}
+        let h = '<table style="width:100%;font-size:12px;border-collapse:collapse;"><tr style="color:#888;"><th style="text-align:left;padding:6px;">시간</th><th>유형</th><th>건수</th><th>결과</th></tr>';
+        logs.forEach(l => {{
+            const t = l.trigger_type === 'auto' ? '🤖 자동' : '👆 수동';
+            const color = l.failed > 0 ? '#fca5a5' : '#86efac';
+            h += '<tr style="border-top:1px solid #222;"><td style="padding:6px;">' + esc((l.created_at||'').substring(0,16)) + '</td><td>' + t + '</td><td>' + l.total_orders + '건</td><td style="color:' + color + ';">성공 ' + l.processed + ' / 실패 ' + l.failed + '</td></tr>';
+        }});
+        h += '</table>';
+        el.innerHTML = h;
+    }}
+
+    // 페이지 로드 시 주문 + 로그 조회
+    fetchOrders();
+    loadLogs();
     </script>
     """
     return HTMLResponse(render_page("대시보드", content, user_id))
@@ -661,14 +784,64 @@ async def api_dashboard_process(request: Request, session: Optional[str] = Cooki
     user_id, err = _dashboard_auth(request, session)
     if err:
         return err
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return {"success": False, "error": "잘못된 요청입니다."}
     dry_run = body.get("dry_run", True)
     from auth import set_credentials
     try:
         _load_user_creds(user_id)
-        return await process_orders(days=7, dry_run=dry_run)
+        result = await process_orders(days=7, dry_run=dry_run)
+        if not dry_run and result.get("total", 0) > 0:
+            db.create_processing_log(
+                user_id=user_id,
+                trigger_type="manual",
+                total=result.get("total", 0),
+                processed=result.get("processed", 0),
+                failed=result.get("failed", 0),
+                result_json=json.dumps(result.get("results", []), ensure_ascii=False),
+            )
+        return result
     finally:
         set_credentials(None)
+
+
+@app.post("/api/dashboard/automation")
+async def api_dashboard_automation(request: Request, session: Optional[str] = Cookie(None)):
+    user_id, err = _dashboard_auth(request, session)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return {"success": False, "error": "잘못된 요청입니다."}
+    enabled = bool(body.get("enabled", False))
+    try:
+        interval = int(body.get("interval_minutes", 60))
+    except (ValueError, TypeError):
+        return {"success": False, "error": "interval_minutes는 숫자여야 합니다."}
+    interval = max(10, min(interval, 1440))
+    db.update_automation_settings(user_id, enabled, interval)
+    return {"success": True, "enabled": enabled, "interval_minutes": interval}
+
+
+@app.get("/api/dashboard/automation")
+async def api_get_automation(request: Request, session: Optional[str] = Cookie(None)):
+    user_id, err = _dashboard_auth(request, session)
+    if err:
+        return err
+    settings = db.get_automation_settings(user_id)
+    return {"success": True, **(settings or {"enabled": False, "interval_minutes": 60})}
+
+
+@app.post("/api/dashboard/logs")
+async def api_dashboard_logs(request: Request, session: Optional[str] = Cookie(None)):
+    user_id, err = _dashboard_auth(request, session)
+    if err:
+        return err
+    logs = db.get_processing_logs(user_id, limit=20)
+    return {"success": True, "logs": logs}
 
 
 # ============ 웹 UI - API 설정 ============
@@ -686,9 +859,11 @@ async def settings_page(session: Optional[str] = Cookie(None), success: str = ""
         val = html.escape(creds.get(name) or "", quote=True)
         return f'<label>{label}</label><input type="{type}" name="{name}" value="{val}">'
 
+    csrf = get_csrf_token(session)
     content = f"""
     {msg}
     <form method="post">
+        <input type="hidden" name="csrf_token" value="{csrf}">
         <div class="card">
             <div class="field-group-title">쿠팡 WING</div>
             {field("coupang_vendor_id", "Vendor ID")}
@@ -723,7 +898,9 @@ async def settings_submit(request: Request, session: Optional[str] = Cookie(None
         return RedirectResponse("/login", status_code=303)
 
     form = await request.form()
-    credentials = {k: v for k, v in form.items()}
+    if not verify_csrf(session, form.get("csrf_token", "")):
+        return RedirectResponse("/settings", status_code=303)
+    credentials = {k: v for k, v in form.items() if k != "csrf_token"}
     db.update_user_credentials(user_id, credentials)
     return RedirectResponse("/settings?success=저장되었습니다", status_code=303)
 
@@ -767,6 +944,7 @@ async def tokens_page(session: Optional[str] = Cookie(None)):
             <div>
                 <span style="color: {status_color}; margin-right: 10px;">{status}</span>
                 <form method="post" action="/tokens/delete" style="display: inline;">
+                    <input type="hidden" name="csrf_token" value="{get_csrf_token(session)}">
                     <input type="hidden" name="token_id" value="{t["id"]}">
                     <button type="submit" class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;">삭제</button>
                 </form>
@@ -782,6 +960,7 @@ async def tokens_page(session: Optional[str] = Cookie(None)):
     <div class="card">
         <h2 style="margin-top: 0;">새 토큰 생성</h2>
         <form method="post" action="/tokens/create">
+            <input type="hidden" name="csrf_token" value="{get_csrf_token(session)}">
             <label>토큰 이름 (선택)</label>
             <input type="text" name="name" placeholder="예: Claude Desktop용">
             <button type="submit">토큰 생성</button>
@@ -805,10 +984,12 @@ async def tokens_page(session: Optional[str] = Cookie(None)):
 
 
 @app.post("/tokens/create")
-async def create_token_submit(session: Optional[str] = Cookie(None), name: str = Form("default")):
+async def create_token_submit(request: Request, session: Optional[str] = Cookie(None), name: str = Form("default"), csrf_token: str = Form("")):
     user_id = get_session_user(session)
     if not user_id:
         return RedirectResponse("/login", status_code=303)
+    if not verify_csrf(session, csrf_token):
+        return RedirectResponse("/tokens", status_code=303)
     token = db.create_token(user_id, name or "default")
     if session:
         session_flash[session] = {"new_token": token}
@@ -816,10 +997,12 @@ async def create_token_submit(session: Optional[str] = Cookie(None), name: str =
 
 
 @app.post("/tokens/delete")
-async def delete_token_submit(session: Optional[str] = Cookie(None), token_id: int = Form(...)):
+async def delete_token_submit(request: Request, session: Optional[str] = Cookie(None), token_id: int = Form(...), csrf_token: str = Form("")):
     user_id = get_session_user(session)
     if not user_id:
         return RedirectResponse("/login", status_code=303)
+    if not verify_csrf(session, csrf_token):
+        return RedirectResponse("/tokens", status_code=303)
     db.delete_token(token_id, user_id)
     return RedirectResponse("/tokens", status_code=303)
 
