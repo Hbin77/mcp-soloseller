@@ -24,7 +24,9 @@ TURNSTILE_SITE_KEY = os.environ.get("TURNSTILE_SITE_KEY", "")
 TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
 
 # 세션 저장소 (메모리 - 프로덕션에서는 Redis 등 사용 권장)
+MAX_SESSIONS = 10000
 sessions: dict[str, int] = {}
+session_csrf: dict[str, str] = {}
 session_flash: dict[str, dict] = {}
 pending_registrations: dict[str, dict] = {}
 
@@ -36,9 +38,29 @@ def get_session_user(session_id: Optional[str]) -> Optional[int]:
 
 
 def create_session(user_id: int) -> str:
+    if len(sessions) >= MAX_SESSIONS:
+        # 가장 오래된 세션 절반 제거
+        to_remove = list(sessions.keys())[:MAX_SESSIONS // 2]
+        for k in to_remove:
+            sessions.pop(k, None)
+            session_csrf.pop(k, None)
     session_id = secrets.token_urlsafe(32)
     sessions[session_id] = user_id
+    session_csrf[session_id] = secrets.token_urlsafe(32)
     return session_id
+
+
+def get_csrf_token(session_id: Optional[str]) -> str:
+    if session_id and session_id in session_csrf:
+        return session_csrf[session_id]
+    return ""
+
+
+def verify_csrf(session_id: Optional[str], token: str) -> bool:
+    expected = get_csrf_token(session_id)
+    if not expected:
+        return False
+    return secrets.compare_digest(expected, token)
 
 
 async def verify_turnstile(token: str) -> bool:
@@ -63,6 +85,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; "
+            "style-src 'self' 'unsafe-inline'; "
+            "frame-src https://challenges.cloudflare.com; "
+            "connect-src 'self'"
+        )
         return response
 
 
@@ -406,6 +435,8 @@ async def register_submit(request: Request, email: str = Form(...), password: st
     if not send_verification_email(email, code):
         return RedirectResponse("/register?error=인증 이메일 발송에 실패했습니다", status_code=303)
 
+    if len(pending_registrations) >= 1000:
+        pending_registrations.clear()
     reg_token = secrets.token_urlsafe(32)
     pending_registrations[reg_token] = {"email": email, "password_hash": db.hash_password(password)}
 
@@ -828,9 +859,11 @@ async def settings_page(session: Optional[str] = Cookie(None), success: str = ""
         val = html.escape(creds.get(name) or "", quote=True)
         return f'<label>{label}</label><input type="{type}" name="{name}" value="{val}">'
 
+    csrf = get_csrf_token(session)
     content = f"""
     {msg}
     <form method="post">
+        <input type="hidden" name="csrf_token" value="{csrf}">
         <div class="card">
             <div class="field-group-title">쿠팡 WING</div>
             {field("coupang_vendor_id", "Vendor ID")}
@@ -865,7 +898,9 @@ async def settings_submit(request: Request, session: Optional[str] = Cookie(None
         return RedirectResponse("/login", status_code=303)
 
     form = await request.form()
-    credentials = {k: v for k, v in form.items()}
+    if not verify_csrf(session, form.get("csrf_token", "")):
+        return RedirectResponse("/settings", status_code=303)
+    credentials = {k: v for k, v in form.items() if k != "csrf_token"}
     db.update_user_credentials(user_id, credentials)
     return RedirectResponse("/settings?success=저장되었습니다", status_code=303)
 
@@ -909,6 +944,7 @@ async def tokens_page(session: Optional[str] = Cookie(None)):
             <div>
                 <span style="color: {status_color}; margin-right: 10px;">{status}</span>
                 <form method="post" action="/tokens/delete" style="display: inline;">
+                    <input type="hidden" name="csrf_token" value="{get_csrf_token(session)}">
                     <input type="hidden" name="token_id" value="{t["id"]}">
                     <button type="submit" class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;">삭제</button>
                 </form>
@@ -924,6 +960,7 @@ async def tokens_page(session: Optional[str] = Cookie(None)):
     <div class="card">
         <h2 style="margin-top: 0;">새 토큰 생성</h2>
         <form method="post" action="/tokens/create">
+            <input type="hidden" name="csrf_token" value="{get_csrf_token(session)}">
             <label>토큰 이름 (선택)</label>
             <input type="text" name="name" placeholder="예: Claude Desktop용">
             <button type="submit">토큰 생성</button>
@@ -947,10 +984,12 @@ async def tokens_page(session: Optional[str] = Cookie(None)):
 
 
 @app.post("/tokens/create")
-async def create_token_submit(session: Optional[str] = Cookie(None), name: str = Form("default")):
+async def create_token_submit(request: Request, session: Optional[str] = Cookie(None), name: str = Form("default"), csrf_token: str = Form("")):
     user_id = get_session_user(session)
     if not user_id:
         return RedirectResponse("/login", status_code=303)
+    if not verify_csrf(session, csrf_token):
+        return RedirectResponse("/tokens", status_code=303)
     token = db.create_token(user_id, name or "default")
     if session:
         session_flash[session] = {"new_token": token}
@@ -958,10 +997,12 @@ async def create_token_submit(session: Optional[str] = Cookie(None), name: str =
 
 
 @app.post("/tokens/delete")
-async def delete_token_submit(session: Optional[str] = Cookie(None), token_id: int = Form(...)):
+async def delete_token_submit(request: Request, session: Optional[str] = Cookie(None), token_id: int = Form(...), csrf_token: str = Form("")):
     user_id = get_session_user(session)
     if not user_id:
         return RedirectResponse("/login", status_code=303)
+    if not verify_csrf(session, csrf_token):
+        return RedirectResponse("/tokens", status_code=303)
     db.delete_token(token_id, user_id)
     return RedirectResponse("/tokens", status_code=303)
 
