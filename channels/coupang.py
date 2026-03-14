@@ -53,7 +53,7 @@ class CoupangClient:
                 path = f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}/ordersheets"
                 params = {
                     "createdAtFrom": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"),
-                    "createdAtTo": datetime.now().strftime("%Y-%m-%d"),
+                    "createdAtTo": (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
                     "status": status
                 }
                 query_string = urlencode(params)
@@ -66,10 +66,11 @@ class CoupangClient:
                 )
 
                 if response.status_code != 200:
-                    logger.error("주문 조회 실패", status_code=response.status_code, order_status=status)
+                    logger.error("주문 조회 실패", status_code=response.status_code, order_status=status, body=response.text[:500])
                     continue
 
                 data = response.json()
+                logger.debug("쿠팡 API 응답", order_status=status, data_count=len(data.get("data", [])), code=data.get("code"))
                 for order_data in data.get("data", []):
                     order = self._parse_order(order_data)
                     if order:
