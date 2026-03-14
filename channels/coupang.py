@@ -46,41 +46,40 @@ class CoupangClient:
         }
 
     async def get_new_orders(self, days: int = 7) -> List[dict]:
-        """신규 주문 조회"""
-        try:
-            path = f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}/ordersheets"
-            params = {
-                "createdAtFrom": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"),
-                "createdAtTo": datetime.now().strftime("%Y-%m-%d"),
-                "status": "ACCEPT"
-            }
-            query_string = urlencode(params)
-            headers = self._generate_signature("GET", path, query_string)
+        """신규 주문 조회 (발주대기 + 발주확인 상태)"""
+        all_orders = []
+        for status in ["INSTRUCT", "ACCEPT"]:
+            try:
+                path = f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}/ordersheets"
+                params = {
+                    "createdAtFrom": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"),
+                    "createdAtTo": datetime.now().strftime("%Y-%m-%d"),
+                    "status": status
+                }
+                query_string = urlencode(params)
+                headers = self._generate_signature("GET", path, query_string)
 
-            response = await self.http_client.get(
-                f"{self.BASE_URL}{path}",
-                params=params,
-                headers=headers
-            )
+                response = await self.http_client.get(
+                    f"{self.BASE_URL}{path}",
+                    params=params,
+                    headers=headers
+                )
 
-            if response.status_code != 200:
-                logger.error("주문 조회 실패", status=response.status_code)
-                return []
+                if response.status_code != 200:
+                    logger.error("주문 조회 실패", status_code=response.status_code, order_status=status)
+                    continue
 
-            data = response.json()
-            orders = []
+                data = response.json()
+                for order_data in data.get("data", []):
+                    order = self._parse_order(order_data)
+                    if order:
+                        all_orders.append(order.to_dict())
 
-            for order_data in data.get("data", []):
-                order = self._parse_order(order_data)
-                if order:
-                    orders.append(order.to_dict())
+            except Exception as e:
+                logger.exception("주문 조회 오류", error=str(e), order_status=status)
 
-            logger.info("쿠팡 주문 조회 완료", count=len(orders))
-            return orders
-
-        except Exception as e:
-            logger.exception("주문 조회 오류", error=str(e))
-            return []
+        logger.info("쿠팡 주문 조회 완료", count=len(all_orders))
+        return all_orders
 
     def _parse_order(self, data: dict) -> Optional[ChannelOrder]:
         """주문 데이터 파싱"""

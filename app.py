@@ -87,10 +87,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; "
+            "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://static.cloudflareinsights.com; "
             "style-src 'self' 'unsafe-inline'; "
             "frame-src https://challenges.cloudflare.com; "
-            "connect-src 'self'"
+            "connect-src 'self' https://cloudflareinsights.com"
         )
         return response
 
