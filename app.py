@@ -679,6 +679,7 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
     function processConfirm() {{ document.getElementById('confirm-modal').style.display = 'flex'; }}
     function closeModal() {{ document.getElementById('confirm-modal').style.display = 'none'; }}
 
+    let lastResults = [];
     async function doProcess() {{
         closeModal();
         document.getElementById('process-btn').textContent = '처리 중...';
@@ -687,17 +688,80 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
         document.getElementById('process-btn').textContent = '일괄 처리';
         document.getElementById('process-btn').disabled = false;
         if (data.results) {{
+            lastResults = data.results;
             let h = '<table style="width:100%;font-size:13px;"><tr style="color:#888;"><th style="text-align:left;padding:8px;">주문</th><th>송장번호</th><th>상태</th></tr>';
             data.results.forEach(r => {{
-                const st = r.status === '완료' ? '<span style="color:#86efac;">완료</span>' : '<span style="color:#fca5a5;">' + esc(r.error || r.status) + '</span>';
+                const st = (r.status === '완료' || r.status === '테스트') ? '<span style="color:#86efac;">' + esc(r.status) + '</span>' : '<span style="color:#fca5a5;">' + esc(r.error || r.status) + '</span>';
                 h += '<tr style="border-top:1px solid #222;"><td style="padding:8px;font-size:12px;">' + esc(r.order_id) + '</td><td style="font-family:monospace;">' + esc(r.tracking_number||'-') + '</td><td>' + st + '</td></tr>';
             }});
             h += '</table><p style="color:#888;font-size:12px;margin-top:8px;">총 ' + (data.total||0) + '건 | 성공 ' + (data.processed||0) + '건 | 실패 ' + (data.failed||0) + '건</p>';
+            const printable = data.results.filter(r => r.tracking_number && (r.status === '완료' || r.status === '테스트'));
+            if (printable.length > 0) {{
+                h += '<button onclick="printLabels()" style="margin-top:12px;background:#2563eb;padding:10px 24px;">송장 출력 (' + printable.length + '건)</button>';
+            }}
             document.getElementById('orders-table').innerHTML = h;
         }} else {{
             document.getElementById('orders-table').innerHTML = '<p style="color:#888;font-size:13px;">' + esc(data.message || '완료') + '</p>';
         }}
         loadLogs();
+    }}
+
+    function printLabels() {{
+        const printable = lastResults.filter(r => r.tracking_number && (r.status === '완료' || r.status === '테스트'));
+        if (printable.length === 0) return;
+        const w = window.open('', '_blank');
+        let labels = '';
+        printable.forEach(r => {{
+            labels += `
+            <div class="label">
+                <div class="carrier">CJ대한통운</div>
+                <div class="barcode-area"><svg class="barcode" data-value="${{r.tracking_number}}"></svg></div>
+                <div class="tracking">${{r.tracking_number}}</div>
+                <div class="section receiver">
+                    <div class="section-title">받는 분</div>
+                    <div class="name">${{r.receiver_name || ''}}</div>
+                    <div>${{r.receiver_phone || ''}}</div>
+                    <div>${{r.receiver_address || ''}}</div>
+                </div>
+                <div class="divider"></div>
+                <div class="section sender">
+                    <div class="section-title">보내는 분</div>
+                    <div>${{r.sender_name || ''}} ${{r.sender_phone || ''}}</div>
+                    <div>${{r.sender_address || ''}}</div>
+                </div>
+                <div class="product">상품: ${{r.product_name || '상품'}}</div>
+                <div class="order-id">주문번호: ${{r.order_id}}</div>
+            </div>`;
+        }});
+        w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>송장 출력</title>
+        <style>
+            @page {{ size: 100mm 150mm; margin: 0; }}
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; }}
+            .label {{ width: 100mm; height: 150mm; padding: 5mm; page-break-after: always; border: 1px solid #ccc; position: relative; }}
+            .carrier {{ font-size: 16pt; font-weight: bold; text-align: center; padding: 3mm 0; border-bottom: 2px solid #000; }}
+            .barcode-area {{ text-align: center; padding: 3mm 0; }}
+            .barcode {{ width: 80mm; height: 15mm; }}
+            .tracking {{ text-align: center; font-size: 14pt; font-weight: bold; font-family: monospace; letter-spacing: 2px; margin-bottom: 3mm; }}
+            .section {{ padding: 2mm 0; }}
+            .section-title {{ font-size: 8pt; color: #666; margin-bottom: 1mm; }}
+            .receiver .name {{ font-size: 14pt; font-weight: bold; }}
+            .receiver {{ font-size: 11pt; line-height: 1.6; }}
+            .sender {{ font-size: 9pt; color: #333; line-height: 1.5; }}
+            .divider {{ border-top: 1px dashed #999; margin: 2mm 0; }}
+            .product {{ font-size: 9pt; margin-top: 2mm; padding-top: 2mm; border-top: 1px dashed #999; }}
+            .order-id {{ font-size: 8pt; color: #888; margin-top: 1mm; }}
+            @media print {{ .label {{ border: none; }} }}
+        </style>
+        <script src="/static/jsbarcode.min.js"><\\/script>
+        </head><body>${{labels}}
+        <script>
+            document.querySelectorAll('.barcode').forEach(svg => {{
+                JsBarcode(svg, svg.dataset.value, {{ format: 'CODE128', width: 2, height: 50, displayValue: false }});
+            }});
+            setTimeout(() => window.print(), 500);
+        <\\/script></body></html>`);
+        w.document.close();
     }}
 
     // 자동화

@@ -160,13 +160,28 @@ async def process_orders(days: int = 7, dry_run: bool = False) -> dict[str, Any]
         tracking = invoice_result.get("tracking_number", "")
         is_test = "warning" in invoice_result
 
+        # 송장 출력용 공통 데이터
+        creds = get_credentials()
+        label_data = {
+            "receiver_name": receiver,
+            "receiver_phone": phone,
+            "receiver_address": address,
+            "receiver_zipcode": zipcode,
+            "product_name": product or "상품",
+            "sender_name": creds.sender_name if creds else "",
+            "sender_phone": creds.sender_phone if creds else "",
+            "sender_address": creds.sender_address if creds else "",
+            "sender_zipcode": creds.sender_zipcode if creds else "",
+        }
+
         # 테스트 모드 송장은 쿠팡에 등록하지 않음
         if is_test:
             results.append({
                 "order_id": order_id,
                 "status": "테스트",
                 "tracking_number": tracking,
-                "warning": "테스트 모드 - 쿠팡 등록 생략"
+                "warning": "테스트 모드 - 쿠팡 등록 생략",
+                **label_data,
             })
             processed += 1
             continue
@@ -181,7 +196,8 @@ async def process_orders(days: int = 7, dry_run: bool = False) -> dict[str, Any]
             results.append({
                 "order_id": order_id,
                 "status": "완료",
-                "tracking_number": tracking
+                "tracking_number": tracking,
+                **label_data,
             })
             processed += 1
         else:
@@ -189,7 +205,8 @@ async def process_orders(days: int = 7, dry_run: bool = False) -> dict[str, Any]
                 "order_id": order_id,
                 "status": "등록실패",
                 "tracking_number": tracking,
-                "error": reg_result.get("error")
+                "error": reg_result.get("error"),
+                **label_data,
             })
             failed += 1
 
