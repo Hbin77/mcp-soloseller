@@ -6,7 +6,7 @@ services:
     container_name: shop-mcp-server
     restart: unless-stopped
     ports:
-      - "8082:8082"
+      - "8090:8090"
     environment:
       - TZ=Asia/Seoul
       # CORS 허용 도메인
@@ -23,7 +23,7 @@ services:
     volumes:
       - ./data:/app/data
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/')"]
       interval: 30s
       timeout: 10s
       retries: 3

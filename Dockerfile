@@ -15,11 +15,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 포트 노출
-EXPOSE 8082
+EXPOSE 8090
 
 # 헬스체크
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8082/')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8090/')" || exit 1
 
 # 서버 실행
-CMD ["python", "server.py", "--http", "--host", "0.0.0.0", "--port", "8082"]
+CMD ["python", "server.py", "--http", "--host", "0.0.0.0", "--port", "8090"]
