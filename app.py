@@ -710,27 +710,29 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
         const printable = lastResults.filter(r => r.tracking_number && (r.status === '완료' || r.status === '테스트'));
         if (printable.length === 0) return;
         const w = window.open('', '_blank');
+        if (!w) {{ alert('팝업이 차단되었습니다. 팝업을 허용해주세요.'); return; }}
+        const e = s => {{ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }};
         let labels = '';
         printable.forEach(r => {{
             labels += `
             <div class="label">
                 <div class="carrier">CJ대한통운</div>
-                <div class="barcode-area"><svg class="barcode" data-value="${{r.tracking_number}}"></svg></div>
-                <div class="tracking">${{r.tracking_number}}</div>
+                <div class="barcode-area"><svg class="barcode" data-value="${{e(r.tracking_number)}}"></svg></div>
+                <div class="tracking">${{e(r.tracking_number)}}</div>
                 <div class="section receiver">
                     <div class="section-title">받는 분</div>
-                    <div class="name">${{r.receiver_name || ''}}</div>
-                    <div>${{r.receiver_phone || ''}}</div>
-                    <div>${{r.receiver_address || ''}}</div>
+                    <div class="name">${{e(r.receiver_name)}}</div>
+                    <div>${{e(r.receiver_phone)}}</div>
+                    <div>${{e(r.receiver_address)}}</div>
                 </div>
                 <div class="divider"></div>
                 <div class="section sender">
                     <div class="section-title">보내는 분</div>
-                    <div>${{r.sender_name || ''}} ${{r.sender_phone || ''}}</div>
-                    <div>${{r.sender_address || ''}}</div>
+                    <div>${{e(r.sender_name)}} ${{e(r.sender_phone)}}</div>
+                    <div>${{e(r.sender_address)}}</div>
                 </div>
-                <div class="product">상품: ${{r.product_name || '상품'}}</div>
-                <div class="order-id">주문번호: ${{r.order_id}}</div>
+                <div class="product">상품: ${{e(r.product_name)}}</div>
+                <div class="order-id">주문번호: ${{e(r.order_id)}}</div>
             </div>`;
         }});
         w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>송장 출력</title>

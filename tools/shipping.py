@@ -130,6 +130,13 @@ async def process_orders(days: int = 7, dry_run: bool = False) -> dict[str, Any]
     results = []
     processed = 0
     failed = 0
+    creds = get_credentials()
+    sender_data = {
+        "sender_name": creds.sender_name if creds else "",
+        "sender_phone": creds.sender_phone if creds else "",
+        "sender_address": creds.sender_address if creds else "",
+        "sender_zipcode": creds.sender_zipcode if creds else "",
+    }
 
     for order in orders:
         order_id = order.get("order_id", "")
@@ -161,17 +168,13 @@ async def process_orders(days: int = 7, dry_run: bool = False) -> dict[str, Any]
         is_test = "warning" in invoice_result
 
         # 송장 출력용 공통 데이터
-        creds = get_credentials()
         label_data = {
             "receiver_name": receiver,
             "receiver_phone": phone,
             "receiver_address": address,
             "receiver_zipcode": zipcode,
             "product_name": product or "상품",
-            "sender_name": creds.sender_name if creds else "",
-            "sender_phone": creds.sender_phone if creds else "",
-            "sender_address": creds.sender_address if creds else "",
-            "sender_zipcode": creds.sender_zipcode if creds else "",
+            **sender_data,
         }
 
         # 테스트 모드 송장은 쿠팡에 등록하지 않음

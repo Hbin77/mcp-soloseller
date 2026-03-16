@@ -1,4 +1,5 @@
 """쿠팡 WING API 클라이언트"""
+import asyncio
 import httpx
 import hmac
 import hashlib
@@ -46,41 +47,51 @@ class CoupangClient:
         }
 
     async def get_new_orders(self, days: int = 7) -> List[dict]:
-        """신규 주문 조회 (발주대기 + 발주확인 상태)"""
+        """신규 주문 조회 (발주대기 + 발주확인 상태, 병렬 호출)"""
+        results = await asyncio.gather(
+            self._fetch_orders_by_status("INSTRUCT", days),
+            self._fetch_orders_by_status("ACCEPT", days),
+        )
         all_orders = []
-        for status in ["INSTRUCT", "ACCEPT"]:
-            try:
-                path = f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}/ordersheets"
-                params = {
-                    "createdAtFrom": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"),
-                    "createdAtTo": (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
-                    "status": status
-                }
-                query_string = urlencode(params)
-                headers = self._generate_signature("GET", path, query_string)
-
-                response = await self.http_client.get(
-                    f"{self.BASE_URL}{path}",
-                    params=params,
-                    headers=headers
-                )
-
-                if response.status_code != 200:
-                    logger.error("주문 조회 실패", status_code=response.status_code, order_status=status, body=response.text[:500])
-                    continue
-
-                data = response.json()
-                logger.debug("쿠팡 API 응답", order_status=status, data_count=len(data.get("data", [])), code=data.get("code"))
-                for order_data in data.get("data", []):
-                    order = self._parse_order(order_data)
-                    if order:
-                        all_orders.append(order.to_dict())
-
-            except Exception as e:
-                logger.exception("주문 조회 오류", error=str(e), order_status=status)
-
+        for orders in results:
+            all_orders.extend(orders)
         logger.info("쿠팡 주문 조회 완료", count=len(all_orders))
         return all_orders
+
+    async def _fetch_orders_by_status(self, status: str, days: int) -> List[dict]:
+        """단일 상태의 주문 조회"""
+        try:
+            path = f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}/ordersheets"
+            params = {
+                "createdAtFrom": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"),
+                "createdAtTo": (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
+                "status": status
+            }
+            query_string = urlencode(params)
+            headers = self._generate_signature("GET", path, query_string)
+
+            response = await self.http_client.get(
+                f"{self.BASE_URL}{path}",
+                params=params,
+                headers=headers
+            )
+
+            if response.status_code != 200:
+                logger.error("주문 조회 실패", status_code=response.status_code, order_status=status)
+                return []
+
+            data = response.json()
+            logger.debug("쿠팡 API 응답", order_status=status, data_count=len(data.get("data", [])))
+            orders = []
+            for order_data in data.get("data", []):
+                order = self._parse_order(order_data)
+                if order:
+                    orders.append(order.to_dict())
+            return orders
+
+        except Exception as e:
+            logger.exception("주문 조회 오류", error=str(e), order_status=status)
+            return []
 
     def _parse_order(self, data: dict) -> Optional[ChannelOrder]:
         """주문 데이터 파싱"""
