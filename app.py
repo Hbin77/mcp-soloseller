@@ -486,7 +486,7 @@ async def verify_email_submit(token: str = Form(...), email: str = Form(...), co
     if not user_id:
         return RedirectResponse("/register?error=회원가입에 실패했습니다", status_code=303)
 
-    db.mark_email_verified(email)
+    db.mark_email_verified(reg_data["email"])
     return RedirectResponse("/login?success=회원가입이 완료되었습니다! 로그인해주세요", status_code=303)
 
 

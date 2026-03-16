@@ -91,7 +91,7 @@ async def cron_tick():
 
 def start_scheduler():
     """스케줄러 시작"""
-    scheduler.add_job(cron_tick, "interval", minutes=1, id="cron_tick", replace_existing=True)
+    scheduler.add_job(cron_tick, "interval", minutes=1, id="cron_tick", replace_existing=True, max_instances=1)
     scheduler.start()
     logger.info("scheduler.started")
 

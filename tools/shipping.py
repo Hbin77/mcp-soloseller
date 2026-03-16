@@ -78,18 +78,21 @@ async def register_invoice(
         access_key=creds.coupang_access_key,
         secret_key=creds.coupang_secret_key
     )
-    success = await client.register_invoice(
-        order_id=order_id,
-        tracking_number=tracking_number,
-        carrier_code="CJGLS"
-    )
+    try:
+        success = await client.register_invoice(
+            order_id=order_id,
+            tracking_number=tracking_number,
+            carrier_code="CJGLS"
+        )
 
-    return {
-        "success": success,
-        "message": "쿠팡에 송장 등록 완료" if success else "쿠팡 송장 등록 실패",
-        "order_id": order_id,
-        "tracking_number": tracking_number
-    }
+        return {
+            "success": success,
+            "message": "쿠팡에 송장 등록 완료" if success else "쿠팡 송장 등록 실패",
+            "order_id": order_id,
+            "tracking_number": tracking_number
+        }
+    finally:
+        await client.http_client.aclose()
 
 
 async def process_orders(days: int = 7, dry_run: bool = False) -> dict[str, Any]:
