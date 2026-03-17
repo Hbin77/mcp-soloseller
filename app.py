@@ -4,6 +4,8 @@ import json
 import secrets
 import os
 import httpx
+import time
+from collections import defaultdict
 from typing import Any, Optional
 
 from fastapi import FastAPI, Request, Response, Form, Cookie
@@ -29,6 +31,27 @@ sessions: dict[str, int] = {}
 session_csrf: dict[str, str] = {}
 session_flash: dict[str, dict] = {}
 pending_registrations: dict[str, dict] = {}
+
+# 레이트 리밋 (IP별 요청 시각 기록)
+_rate_limits: dict[str, list[float]] = defaultdict(list)
+
+
+MAX_RATE_LIMIT_KEYS = 10000
+
+
+def _check_rate_limit(ip: str, max_requests: int = 5, window_seconds: int = 600) -> bool:
+    """IP 기반 레이트 리밋. 제한 초과 시 False 반환."""
+    now = time.time()
+    # 메모리 제한: 키가 너무 많으면 전체 초기화
+    if len(_rate_limits) > MAX_RATE_LIMIT_KEYS:
+        _rate_limits.clear()
+    timestamps = _rate_limits[ip]
+    # 윈도우 밖의 오래된 기록 제거
+    _rate_limits[ip] = [t for t in timestamps if now - t < window_seconds]
+    if len(_rate_limits[ip]) >= max_requests:
+        return False
+    _rate_limits[ip].append(now)
+    return True
 
 
 def get_session_user(session_id: Optional[str]) -> Optional[int]:
@@ -418,6 +441,9 @@ async def register_page(error: str = "", success: str = ""):
 
 @app.post("/register", response_class=HTMLResponse)
 async def register_submit(request: Request, email: str = Form(...), password: str = Form(...), password2: str = Form(...)):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(f"register:{client_ip}", max_requests=5, window_seconds=600):
+        return RedirectResponse("/register?error=요청이 너무 많습니다. 잠시 후 다시 시도해주세요", status_code=303)
     form = await request.form()
     turnstile_token = form.get("cf-turnstile-response", "")
     if not await verify_turnstile(turnstile_token):
@@ -478,10 +504,11 @@ async def verify_email_page(token: str = "", email: str = "", error: str = ""):
 async def verify_email_submit(token: str = Form(...), email: str = Form(...), code: str = Form(...)):
     if token not in pending_registrations:
         return RedirectResponse("/register?error=유효하지 않은 요청입니다", status_code=303)
-    if not db.verify_code(email, code, "register"):
+    reg_data = pending_registrations.get(token)
+    if not db.verify_code(reg_data["email"], code, "register"):
         return RedirectResponse(f"/verify-email?token={token}&email={email}&error=인증 코드가 올바르지 않습니다", status_code=303)
 
-    reg_data = pending_registrations.pop(token)
+    pending_registrations.pop(token)
     user_id = db.create_user_with_hash(reg_data["email"], reg_data["password_hash"])
     if not user_id:
         return RedirectResponse("/register?error=회원가입에 실패했습니다", status_code=303)
@@ -491,7 +518,10 @@ async def verify_email_submit(token: str = Form(...), email: str = Form(...), co
 
 
 @app.get("/resend-code")
-async def resend_code(token: str = "", email: str = ""):
+async def resend_code(request: Request, token: str = "", email: str = ""):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(f"resend:{client_ip}", max_requests=3, window_seconds=600):
+        return RedirectResponse(f"/verify-email?token={token}&email={email}&error=요청이 너무 많습니다. 잠시 후 다시 시도해주세요", status_code=303)
     if token not in pending_registrations:
         return RedirectResponse("/register?error=유효하지 않은 요청입니다", status_code=303)
     code = db.create_verification_code(email, "register")
@@ -523,6 +553,9 @@ async def login_page(error: str = "", success: str = ""):
 
 @app.post("/login")
 async def login_submit(request: Request, email: str = Form(...), password: str = Form(...)):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(f"login:{client_ip}", max_requests=10, window_seconds=600):
+        return RedirectResponse("/login?error=로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요", status_code=303)
     form = await request.form()
     turnstile_token = form.get("cf-turnstile-response", "")
     if not await verify_turnstile(turnstile_token):

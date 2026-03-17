@@ -20,12 +20,15 @@ async def get_orders(days: int = 7) -> dict[str, Any]:
             access_key=creds.coupang_access_key,
             secret_key=creds.coupang_secret_key
         )
-        orders = await client.get_new_orders(days=days)
+        try:
+            orders = await client.get_new_orders(days=days)
 
-        return {
-            "success": True,
-            "total_count": len(orders),
-            "orders": orders
-        }
+            return {
+                "success": True,
+                "total_count": len(orders),
+                "orders": orders
+            }
+        finally:
+            await client.http_client.aclose()
     except Exception as e:
         return {"success": False, "error": f"쿠팡 주문 조회 실패: {str(e)}"}
