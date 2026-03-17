@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import database as db
-from auth import UserCredentials, set_credentials
+from auth import UserCredentials, set_credentials, _credentials
 
 logger = structlog.get_logger()
 
@@ -34,8 +34,8 @@ async def run_cron_for_user(user_id: int):
     if not creds_dict:
         return
 
+    token = set_credentials(_build_creds(creds_dict))
     try:
-        set_credentials(_build_creds(creds_dict))
         result = await process_orders(days=7, dry_run=False)
 
         total = result.get("total", 0)
@@ -58,7 +58,7 @@ async def run_cron_for_user(user_id: int):
         logger.exception("cron.user_error", user_id=user_id, error=str(e))
         db.update_automation_last_run(user_id, f"오류: {str(e)[:100]}")
     finally:
-        set_credentials(None)
+        _credentials.reset(token)
 
 
 async def cron_tick():

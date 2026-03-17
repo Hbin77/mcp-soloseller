@@ -5,8 +5,8 @@ from auth import get_credentials
 from models import ShippingRequest
 from carriers.cj import CJClient
 
-# CJClient 인스턴스 캐시 (고객ID별, 토큰 24시간 캐싱 활용)
-_cj_clients: dict[str, CJClient] = {}
+# CJClient 인스턴스 캐시 (고객ID+사업자번호 조합 키, 토큰 24시간 캐싱 활용)
+_cj_clients: dict[tuple[str, str], CJClient] = {}
 
 
 async def issue_invoice(
@@ -25,15 +25,22 @@ async def issue_invoice(
     if not creds.sender_configured:
         return {"success": False, "error": "발송인 정보가 설정되지 않았습니다. https://soloseller.cloud/settings 에서 등록해주세요."}
 
-    cache_key = creds.cj_customer_id or ""
-    if cache_key not in _cj_clients:
-        has_real_creds = bool(creds.cj_customer_id and creds.cj_biz_reg_num)
-        _cj_clients[cache_key] = CJClient(
-            customer_id=creds.cj_customer_id or "",
-            biz_reg_num=creds.cj_biz_reg_num or "",
-            test_mode=not has_real_creds,
-        )
-    client = _cj_clients[cache_key]
+    customer_id = creds.cj_customer_id or ""
+    biz_reg_num = creds.cj_biz_reg_num or ""
+    has_real_creds = bool(customer_id and biz_reg_num)
+    cache_key = (customer_id, biz_reg_num)
+
+    # 자격증명 없는 테스트 모드는 캐시하지 않음 (사용자 간 격리)
+    if not has_real_creds:
+        client = CJClient(customer_id="", biz_reg_num="", test_mode=True)
+    else:
+        if cache_key not in _cj_clients:
+            _cj_clients[cache_key] = CJClient(
+                customer_id=customer_id,
+                biz_reg_num=biz_reg_num,
+                test_mode=False,
+            )
+        client = _cj_clients[cache_key]
 
     request = ShippingRequest(
         sender_name=creds.sender_name,

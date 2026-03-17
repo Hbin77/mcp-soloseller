@@ -19,9 +19,10 @@ logger = structlog.get_logger()
 BASE_URL_TEST = "https://dxapi-dev.cjlogistics.com:5054"
 BASE_URL_PROD = "https://dxapi.cjlogistics.com:5052"
 
-# CJ DX API 게이트웨이 키 (Postman collection 제공 고정값)
-GATEWAY_KEY_TEST = "332d248e-ed7c-470c-8732-ccb223b93be8"
-GATEWAY_KEY_PROD = "2c9ec67c-4583-4cb6-84c5-93d3facea345"
+# CJ DX API 게이트웨이 키 (환경변수 필수)
+import os
+GATEWAY_KEY_TEST = os.environ.get("CJ_GATEWAY_KEY_TEST", "")
+GATEWAY_KEY_PROD = os.environ.get("CJ_GATEWAY_KEY_PROD", "")
 
 
 class CJClient:

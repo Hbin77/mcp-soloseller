@@ -47,8 +47,9 @@ def get_credentials() -> Optional[UserCredentials]:
     return _credentials.get()
 
 
-def set_credentials(credentials) -> None:
-    _credentials.set(credentials)
+def set_credentials(credentials):
+    """자격증명 설정. ContextVar Token을 반환하여 reset에 사용 가능."""
+    return _credentials.set(credentials)
 
 
 def extract_credentials_from_headers(headers: dict) -> UserCredentials:
