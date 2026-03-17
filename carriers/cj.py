@@ -2,9 +2,11 @@
 
 CJ Logistics DX API 연동:
 - 인증: ReqOneDayToken → 24시간 유효 토큰
+- 주소 검증: ReqAddrRfnSm → 배송 가능 여부 확인
 - 운송장 발급: ReqInvcNo
 - 접수: RegBook
 """
+import os
 import re
 import httpx
 import secrets
@@ -20,9 +22,23 @@ BASE_URL_TEST = "https://dxapi-dev.cjlogistics.com:5054"
 BASE_URL_PROD = "https://dxapi.cjlogistics.com:5052"
 
 # CJ DX API 게이트웨이 키 (환경변수 필수)
-import os
 GATEWAY_KEY_TEST = os.environ.get("CJ_GATEWAY_KEY_TEST", "")
 GATEWAY_KEY_PROD = os.environ.get("CJ_GATEWAY_KEY_PROD", "")
+
+# 주소 정제 오류 코드 → 메시지 매핑 (문서 p.11)
+_ADDR_ERROR_MESSAGES = {
+    "-20000": "입력 파라미터 값이 잘못되었습니다.",
+    "-20001": "CJ 대한통운에 등록되지 않은 고객 ID입니다.",
+    "-20002": "주소 분석에 실패했습니다.",
+    "-20003": "집배권역 설정값을 찾지 못했습니다.",
+    "-20004": "집배권역 점소정보가 폐점이거나 사용중지 상태입니다.",
+    "-20005": "배송/집화 담당 사원이 설정되지 않았습니다.",
+    "-20006": "도착지 코드 추출에 실패했습니다.",
+    "-20007": "분류주소 추출에 실패했습니다.",
+    "-20008": "고객 ID 계약이 만료되었거나 존재하지 않습니다.",
+    "-20009": "배송이 불가능한 주소지입니다.",
+    "-20010": "배송지연이 발생할 수 있는 지역입니다.",
+}
 
 
 class CJClient:
@@ -59,7 +75,7 @@ class CJClient:
 
     @staticmethod
     def _split_address(address: str) -> Tuple[str, str]:
-        """주소를 기본주소 + 상세주소로 분리 (폴백용)"""
+        """주소를 기본주소 + 상세주소로 분리"""
         # 시/구/군/동/읍/면/리 뒤의 공백에서 분리 시도
         match = re.search(r"(.*?(?:시|구|군|동|읍|면|리|로|길)\s+\S+)\s+(.*)", address)
         if match:
@@ -71,30 +87,39 @@ class CJClient:
             return address, ""
         return address[:space_idx], address[space_idx + 1:]
 
-    async def refine_address(self, address: str) -> dict:
-        """CJ DX API 주소 정제 (ReqAddrRfn)
+    async def validate_delivery_address(self, address: str) -> dict:
+        """CJ DX API 주소 정제 (ReqAddrRfnSm) - 배송 가능 여부 검증
+
+        주소를 CJ 시스템에 조회하여 배송 가능 여부와 라우팅 정보를 반환합니다.
+        주소 분리(기본/상세) 용도가 아닌, 배송 가능성 사전 검증 용도입니다.
 
         Returns:
-            {"success": True, "base_addr": "...", "detail_addr": "...", "zipcode": "..."}
-            또는 실패 시 {"success": False, "error": "..."}
+            {
+                "success": True,
+                "deliverable": True,
+                "branch_name": "중구소공",  # 배송집배점명
+                "region": "01",            # 권역 구분
+                "address_code": "5D32",    # 도착지 코드
+                "warning": "..."           # 배송지연 경고 (있는 경우)
+            }
+            또는 실패 시 {"success": False, "deliverable": False, "error": "..."}
         """
         if not self.customer_id or not self.biz_reg_num:
-            return {"success": False, "error": "CJ 자격증명 없음 (테스트 모드)"}
+            return {"success": False, "deliverable": False, "error": "CJ 자격증명 없음 (테스트 모드)"}
 
-        if not address or len(address) > 500:
-            return {"success": False, "error": "주소가 비어있거나 너무 깁니다"}
+        if not address or len(address) > 100:
+            return {"success": False, "deliverable": False, "error": "주소가 비어있거나 너무 깁니다 (최대 100자)"}
 
         try:
             token = await self._get_token()
             resp = await self.http_client.post(
-                f"{self.base_url}/gateway/PA-P-ReqAddrRfn/1.0/ReqAddrRfn",
+                f"{self.base_url}/ReqAddrRfnSm",
                 json={
                     "DATA": {
-                        "ADDRESS": address,
-                        "CLNTMGMCUSTCD": self.biz_reg_num,
-                        "CLNTNUM": self.customer_id,
                         "TOKEN_NUM": token,
-                        "USER_ID": self.customer_id,
+                        "CLNTNUM": self.customer_id,
+                        "CLNTMGMCUSTCD": self.customer_id,
+                        "ADDRESS": address,
                     }
                 },
                 headers={
@@ -106,28 +131,50 @@ class CJClient:
             resp.raise_for_status()
             body = resp.json()
 
-            if body.get("RESULT_CD") != "S":
-                detail = body.get("RESULT_DETAIL", body.get("RESULT_MSG", "주소 정제 실패"))
-                logger.warning("cj.address_refine_failed", error=detail)
-                return {"success": False, "error": "주소 정제 실패"}
+            result_cd = body.get("RESULT_CD", "")
 
+            # 배송 불가능 주소
+            if result_cd == "-20009":
+                return {
+                    "success": True,
+                    "deliverable": False,
+                    "error": _ADDR_ERROR_MESSAGES.get(result_cd, "배송 불가능 주소"),
+                }
+
+            # 배송 지연 가능 지역
+            if result_cd == "-20010":
+                data = body.get("DATA") or {}
+                return {
+                    "success": True,
+                    "deliverable": True,
+                    "branch_name": data.get("CLLDLVBRANNM", ""),
+                    "region": data.get("RSPSDIV", ""),
+                    "address_code": data.get("CLSFCD", ""),
+                    "warning": _ADDR_ERROR_MESSAGES.get(result_cd, "배송지연 가능"),
+                }
+
+            # 기타 오류
+            if result_cd != "S":
+                error_msg = _ADDR_ERROR_MESSAGES.get(result_cd, body.get("RESULT_DETAIL", "주소 검증 실패"))
+                logger.warning("cj.address_validate_failed", result_cd=result_cd)
+                return {"success": False, "deliverable": False, "error": error_msg}
+
+            # 성공
             data = body.get("DATA") or {}
-            base_addr = data.get("ADDR", "")
-            if not base_addr:
-                return {"success": False, "error": "정제 결과 주소 없음"}
-
             return {
                 "success": True,
-                "base_addr": base_addr,
-                "detail_addr": data.get("ADDR_DETAIL", ""),
-                "zipcode": data.get("ZIPNO", ""),
+                "deliverable": True,
+                "branch_name": data.get("CLLDLVBRANNM", ""),
+                "region": data.get("RSPSDIV", ""),
+                "address_code": data.get("CLSFCD", ""),
+                "address_summary": data.get("CLSFADDR", ""),
             }
         except Exception as e:
-            logger.warning("cj.address_refine_error", error=str(e))
-            return {"success": False, "error": "주소 정제 중 오류 발생"}
+            logger.warning("cj.address_validate_error", error=str(e))
+            return {"success": False, "deliverable": True, "error": "주소 검증 중 오류 발생"}
 
     async def _get_token(self) -> str:
-        """토큰 획득 (23시간 TTL 캐싱)"""
+        """토큰 획득 (TOKEN_EXPRTN_DTM 기반 캐싱)"""
         now = datetime.now(timezone.utc)
         if self._token and self._token_expires and now < self._token_expires:
             return self._token
@@ -154,7 +201,19 @@ class CJClient:
         self._token = data.get("TOKEN_NUM")
         if not self._token:
             raise RuntimeError("토큰 발급 응답에 TOKEN_NUM이 없습니다")
-        self._token_expires = now + timedelta(hours=23)
+
+        # TOKEN_EXPRTN_DTM 파싱 (format: YYYYMMDDHHMMSS)
+        expiry_str = data.get("TOKEN_EXPRTN_DTM", "").strip()
+        if expiry_str:
+            try:
+                self._token_expires = datetime.strptime(expiry_str, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                # 만료 30분 전에 갱신하도록 여유 확보
+                self._token_expires -= timedelta(minutes=30)
+            except ValueError:
+                self._token_expires = now + timedelta(hours=23)
+        else:
+            self._token_expires = now + timedelta(hours=23)
+
         logger.info("cj.token_acquired", expires=self._token_expires.isoformat())
         return self._token
 
@@ -195,35 +254,13 @@ class CJClient:
         """접수 등록 (RegBook)"""
         now = datetime.now()
         today = now.strftime("%Y%m%d")
-        tomorrow = (now + timedelta(days=1)).strftime("%Y%m%d")
         order_id = request.order_id or f"ORD{now.strftime('%Y%m%d%H%M%S')}"
         mpck_key = f"{today}_{self.customer_id}_{order_id}"
 
         s1, s2, s3 = self._split_phone(request.sender_phone)
         r1, r2, r3 = self._split_phone(request.receiver_phone)
-
-        # 주소 정제 API 병렬 호출 → 실패 시 로컬 _split_address 폴백
-        import asyncio
-        s_refined, r_refined = await asyncio.gather(
-            self.refine_address(request.sender_address),
-            self.refine_address(request.receiver_address),
-        )
-
-        sender_zip = request.sender_zipcode
-        if s_refined["success"]:
-            s_addr, s_detail = s_refined["base_addr"], s_refined["detail_addr"]
-            if s_refined["zipcode"]:
-                sender_zip = s_refined["zipcode"]
-        else:
-            s_addr, s_detail = self._split_address(request.sender_address)
-
-        receiver_zip = request.receiver_zipcode
-        if r_refined["success"]:
-            r_addr, r_detail = r_refined["base_addr"], r_refined["detail_addr"]
-            if r_refined["zipcode"]:
-                receiver_zip = r_refined["zipcode"]
-        else:
-            r_addr, r_detail = self._split_address(request.receiver_address)
+        s_addr, s_detail = self._split_address(request.sender_address)
+        r_addr, r_detail = self._split_address(request.receiver_address)
 
         payload = {
             "DATA": {
@@ -231,7 +268,7 @@ class CJClient:
                 "TOKEN_NUM": token,
                 "RCPT_YMD": today,
                 "CUST_USE_NO": order_id,
-                "RCPT_DV": "02",
+                "RCPT_DV": "01",
                 "WORK_DV_CD": "01",
                 "REQ_DV_CD": "01",
                 "MPCK_KEY": mpck_key,
@@ -252,7 +289,7 @@ class CJClient:
                 "SENDR_SAFE_NO1": s1,
                 "SENDR_SAFE_NO2": s2,
                 "SENDR_SAFE_NO3": s3,
-                "SENDR_ZIP_NO": sender_zip,
+                "SENDR_ZIP_NO": request.sender_zipcode,
                 "SENDR_ADDR": s_addr,
                 "SENDR_DETAIL_ADDR": s_detail,
                 "RCVR_NM": request.receiver_name,
@@ -265,7 +302,7 @@ class CJClient:
                 "RCVR_SAFE_NO1": r1,
                 "RCVR_SAFE_NO2": r2,
                 "RCVR_SAFE_NO3": r3,
-                "RCVR_ZIP_NO": receiver_zip,
+                "RCVR_ZIP_NO": request.receiver_zipcode,
                 "RCVR_ADDR": r_addr,
                 "RCVR_DETAIL_ADDR": r_detail,
                 "ORDRR_NM": request.sender_name,
@@ -278,22 +315,22 @@ class CJClient:
                 "ORDRR_SAFE_NO1": s1,
                 "ORDRR_SAFE_NO2": s2,
                 "ORDRR_SAFE_NO3": s3,
-                "ORDRR_ZIP_NO": sender_zip,
+                "ORDRR_ZIP_NO": request.sender_zipcode,
                 "ORDRR_ADDR": s_addr,
                 "ORDRR_DETAIL_ADDR": s_detail,
                 "INVC_NO": invoice_no,
-                "ORI_INVC_NO": invoice_no,
+                "ORI_INVC_NO": "",
                 "ORI_ORD_NO": order_id,
-                "COLCT_EXPCT_YMD": tomorrow,
-                "COLCT_EXPCT_HOUR": "11",
-                "SHIP_EXPCT_YMD": tomorrow,
-                "SHIP_EXPCT_HOUR": "11",
-                "PRT_ST": "1",
+                "COLCT_EXPCT_YMD": "",
+                "COLCT_EXPCT_HOUR": "",
+                "SHIP_EXPCT_YMD": "",
+                "SHIP_EXPCT_HOUR": "",
+                "PRT_ST": "01",
                 "ARTICLE_AMT": "1",
                 "REMARK_1": request.memo or "",
                 "REMARK_2": "",
                 "REMARK_3": "",
-                "COD_YN": "20",
+                "COD_YN": "N",
                 "ETC_1": "",
                 "ETC_2": "1",
                 "ETC_3": "",
@@ -334,16 +371,29 @@ class CJClient:
         logger.info("cj.booking_registered", invoice_no=invoice_no)
 
     async def request_invoice(self, request: ShippingRequest) -> ShippingResponse:
-        """송장 발급 (토큰 → 운송장번호 → 접수 등록)"""
+        """송장 발급 (주소검증 → 토큰 → 운송장번호 → 접수 등록)"""
         # Test mode: customer_id나 biz_reg_num이 없으면 테스트 송장
         if not self.customer_id or not self.biz_reg_num:
             return self._test_invoice(request)
 
         try:
+            # 수신자 주소 배송 가능 여부 사전 검증 (실패해도 진행)
+            validation = await self.validate_delivery_address(request.receiver_address)
+            if validation.get("success") and not validation.get("deliverable"):
+                return ShippingResponse(
+                    success=False,
+                    error=f"배송 불가능 주소: {validation.get('error', '확인 필요')}",
+                )
+
             token = await self._get_token()
             invoice_no = await self._request_invoice_number(token)
             await self._register_booking(token, invoice_no, request)
-            return ShippingResponse(success=True, tracking_number=invoice_no)
+
+            response = ShippingResponse(success=True, tracking_number=invoice_no)
+            # 배송 지연 경고가 있으면 첨부
+            if validation.get("warning"):
+                response.error = validation["warning"]
+            return response
         except (httpx.ConnectError, httpx.TimeoutException):
             return ShippingResponse(
                 success=False,
