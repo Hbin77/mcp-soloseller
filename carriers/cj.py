@@ -59,7 +59,7 @@ class CJClient:
 
     @staticmethod
     def _split_address(address: str) -> Tuple[str, str]:
-        """주소를 기본주소 + 상세주소로 분리"""
+        """주소를 기본주소 + 상세주소로 분리 (폴백용)"""
         # 시/구/군/동/읍/면/리 뒤의 공백에서 분리 시도
         match = re.search(r"(.*?(?:시|구|군|동|읍|면|리|로|길)\s+\S+)\s+(.*)", address)
         if match:
@@ -70,6 +70,61 @@ class CJClient:
         if space_idx == -1:
             return address, ""
         return address[:space_idx], address[space_idx + 1:]
+
+    async def refine_address(self, address: str) -> dict:
+        """CJ DX API 주소 정제 (ReqAddrRfn)
+
+        Returns:
+            {"success": True, "base_addr": "...", "detail_addr": "...", "zipcode": "..."}
+            또는 실패 시 {"success": False, "error": "..."}
+        """
+        if not self.customer_id or not self.biz_reg_num:
+            return {"success": False, "error": "CJ 자격증명 없음 (테스트 모드)"}
+
+        if not address or len(address) > 500:
+            return {"success": False, "error": "주소가 비어있거나 너무 깁니다"}
+
+        try:
+            token = await self._get_token()
+            resp = await self.http_client.post(
+                f"{self.base_url}/gateway/PA-P-ReqAddrRfn/1.0/ReqAddrRfn",
+                json={
+                    "DATA": {
+                        "ADDRESS": address,
+                        "CLNTMGMCUSTCD": self.biz_reg_num,
+                        "CLNTNUM": self.customer_id,
+                        "TOKEN_NUM": token,
+                        "USER_ID": self.customer_id,
+                    }
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "CJ-Gateway-APIKey": self.gateway_key,
+                },
+            )
+            resp.raise_for_status()
+            body = resp.json()
+
+            if body.get("RESULT_CD") != "S":
+                detail = body.get("RESULT_DETAIL", body.get("RESULT_MSG", "주소 정제 실패"))
+                logger.warning("cj.address_refine_failed", error=detail)
+                return {"success": False, "error": "주소 정제 실패"}
+
+            data = body.get("DATA") or {}
+            base_addr = data.get("ADDR", "")
+            if not base_addr:
+                return {"success": False, "error": "정제 결과 주소 없음"}
+
+            return {
+                "success": True,
+                "base_addr": base_addr,
+                "detail_addr": data.get("ADDR_DETAIL", ""),
+                "zipcode": data.get("ZIPNO", ""),
+            }
+        except Exception as e:
+            logger.warning("cj.address_refine_error", error=str(e))
+            return {"success": False, "error": "주소 정제 중 오류 발생"}
 
     async def _get_token(self) -> str:
         """토큰 획득 (23시간 TTL 캐싱)"""
@@ -146,8 +201,29 @@ class CJClient:
 
         s1, s2, s3 = self._split_phone(request.sender_phone)
         r1, r2, r3 = self._split_phone(request.receiver_phone)
-        s_addr, s_detail = self._split_address(request.sender_address)
-        r_addr, r_detail = self._split_address(request.receiver_address)
+
+        # 주소 정제 API 병렬 호출 → 실패 시 로컬 _split_address 폴백
+        import asyncio
+        s_refined, r_refined = await asyncio.gather(
+            self.refine_address(request.sender_address),
+            self.refine_address(request.receiver_address),
+        )
+
+        sender_zip = request.sender_zipcode
+        if s_refined["success"]:
+            s_addr, s_detail = s_refined["base_addr"], s_refined["detail_addr"]
+            if s_refined["zipcode"]:
+                sender_zip = s_refined["zipcode"]
+        else:
+            s_addr, s_detail = self._split_address(request.sender_address)
+
+        receiver_zip = request.receiver_zipcode
+        if r_refined["success"]:
+            r_addr, r_detail = r_refined["base_addr"], r_refined["detail_addr"]
+            if r_refined["zipcode"]:
+                receiver_zip = r_refined["zipcode"]
+        else:
+            r_addr, r_detail = self._split_address(request.receiver_address)
 
         payload = {
             "DATA": {
@@ -176,7 +252,7 @@ class CJClient:
                 "SENDR_SAFE_NO1": s1,
                 "SENDR_SAFE_NO2": s2,
                 "SENDR_SAFE_NO3": s3,
-                "SENDR_ZIP_NO": request.sender_zipcode,
+                "SENDR_ZIP_NO": sender_zip,
                 "SENDR_ADDR": s_addr,
                 "SENDR_DETAIL_ADDR": s_detail,
                 "RCVR_NM": request.receiver_name,
@@ -189,7 +265,7 @@ class CJClient:
                 "RCVR_SAFE_NO1": r1,
                 "RCVR_SAFE_NO2": r2,
                 "RCVR_SAFE_NO3": r3,
-                "RCVR_ZIP_NO": request.receiver_zipcode,
+                "RCVR_ZIP_NO": receiver_zip,
                 "RCVR_ADDR": r_addr,
                 "RCVR_DETAIL_ADDR": r_detail,
                 "ORDRR_NM": request.sender_name,
@@ -202,7 +278,7 @@ class CJClient:
                 "ORDRR_SAFE_NO1": s1,
                 "ORDRR_SAFE_NO2": s2,
                 "ORDRR_SAFE_NO3": s3,
-                "ORDRR_ZIP_NO": request.sender_zipcode,
+                "ORDRR_ZIP_NO": sender_zip,
                 "ORDRR_ADDR": s_addr,
                 "ORDRR_DETAIL_ADDR": s_detail,
                 "INVC_NO": invoice_no,
