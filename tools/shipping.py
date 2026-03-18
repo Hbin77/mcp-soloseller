@@ -1,9 +1,13 @@
 """송장 발급/등록 MCP Tools - MVP (CJ대한통운 + 쿠팡)"""
+import os
 from typing import Any
 
 from auth import get_credentials
 from models import ShippingRequest
 from carriers.cj import CJClient
+
+# CJ 개발기 테스트 모드 (CJ_TEST_MODE=true 설정 시 개발 URL 사용)
+CJ_TEST_MODE = os.environ.get("CJ_TEST_MODE", "").lower() in ("true", "1", "yes")
 
 # CJClient 인스턴스 캐시 (고객ID+사업자번호 조합 키, 토큰 24시간 캐싱 활용)
 _cj_clients: dict[tuple[str, str], CJClient] = {}
@@ -38,7 +42,7 @@ async def issue_invoice(
             _cj_clients[cache_key] = CJClient(
                 customer_id=customer_id,
                 biz_reg_num=biz_reg_num,
-                test_mode=False,
+                test_mode=CJ_TEST_MODE,
             )
         client = _cj_clients[cache_key]
 
