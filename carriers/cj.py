@@ -6,7 +6,6 @@ CJ Logistics DX API 연동:
 - 운송장 발급: ReqInvcNo
 - 접수: RegBook
 """
-import os
 import re
 import httpx
 import secrets
@@ -21,9 +20,8 @@ logger = structlog.get_logger()
 BASE_URL_TEST = "https://dxapi-dev.cjlogistics.com:5054"
 BASE_URL_PROD = "https://dxapi.cjlogistics.com:5052"
 
-# CJ DX API 게이트웨이 키 (환경변수 필수)
-GATEWAY_KEY_TEST = os.environ.get("CJ_GATEWAY_KEY_TEST", "")
-GATEWAY_KEY_PROD = os.environ.get("CJ_GATEWAY_KEY_PROD", "")
+
+
 
 # 주소 정제 오류 코드 → 메시지 매핑 (문서 p.11)
 _ADDR_ERROR_MESSAGES = {
@@ -54,7 +52,6 @@ class CJClient:
         self.biz_reg_num = biz_reg_num
         self.test_mode = test_mode
         self.base_url = BASE_URL_TEST if test_mode else BASE_URL_PROD
-        self.gateway_key = GATEWAY_KEY_TEST if test_mode else GATEWAY_KEY_PROD
         self.http_client = httpx.AsyncClient(timeout=30.0)
 
         # Token cache
@@ -125,7 +122,7 @@ class CJClient:
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "application/json",
-                    "CJ-Gateway-APIKey": self.gateway_key,
+                    "CJ-Gateway-APIKey": token,
                 },
             )
             resp.raise_for_status()
@@ -231,7 +228,7 @@ class CJClient:
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "CJ-Gateway-APIKey": self.gateway_key,
+                "CJ-Gateway-APIKey": token,
             },
         )
         resp.raise_for_status()
@@ -359,7 +356,7 @@ class CJClient:
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "CJ-Gateway-APIKey": self.gateway_key,
+                "CJ-Gateway-APIKey": token,
             },
         )
         resp.raise_for_status()
