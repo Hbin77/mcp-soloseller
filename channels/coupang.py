@@ -164,7 +164,7 @@ class CoupangClient:
                 logger.info("송장 등록 완료", order_id=order_id, tracking_number=tracking_number)
                 return True
             else:
-                logger.error("송장 등록 실패", order_id=order_id, status=response.status_code)
+                logger.error("송장 등록 실패", order_id=order_id, status=response.status_code, body=response.text[:500])
                 return False
 
         except Exception as e:
