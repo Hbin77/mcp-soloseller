@@ -733,6 +733,10 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
                 h += '<button onclick="printLabels()" style="margin-top:12px;background:#2563eb;padding:10px 24px;">송장 출력 (' + printable.length + '건)</button>';
             }}
             document.getElementById('orders-table').innerHTML = h;
+            // 송장번호가 있으면 자동으로 출력 창 열기
+            if (printable.length > 0) {{
+                printLabels();
+            }}
         }} else {{
             document.getElementById('orders-table').innerHTML = '<p style="color:#888;font-size:13px;">' + esc(data.message || '완료') + '</p>';
         }}
