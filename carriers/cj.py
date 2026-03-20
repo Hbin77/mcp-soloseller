@@ -254,8 +254,18 @@ class CJClient:
         order_id = request.order_id or f"ORD{now.strftime('%Y%m%d%H%M%S')}"
         mpck_key = f"{today}_{self.customer_id}_{order_id}"
 
+        if not request.receiver_phone or not request.receiver_phone.strip():
+            raise RuntimeError("수화인 전화번호(receiver_phone)는 필수값입니다")
+
         s1, s2, s3 = self._split_phone(request.sender_phone)
         r1, r2, r3 = self._split_phone(request.receiver_phone)
+
+        if not r1 or not r2 or not r3:
+            raise RuntimeError(
+                f"수화인 전화번호 형식이 올바르지 않습니다: '{request.receiver_phone}' "
+                f"(예: 010-1234-5678)"
+            )
+
         s_addr, s_detail = self._split_address(request.sender_address)
         r_addr, r_detail = self._split_address(request.receiver_address)
 
