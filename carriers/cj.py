@@ -11,7 +11,7 @@ import httpx
 import secrets
 import structlog
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from models import ShippingRequest, ShippingResponse
 
@@ -245,19 +245,49 @@ class CJClient:
         logger.info("cj.invoice_number_acquired", invoice_no=invoice_no)
         return invoice_no
 
+    def _build_array_items(self, requests: List[ShippingRequest]) -> list:
+        """합포장 ARRAY 아이템 목록 생성"""
+        items = []
+        for seq, req in enumerate(requests, start=1):
+            items.append({
+                "MPCK_SEQ": str(seq),
+                "GDS_CD": "01",
+                "GDS_NM": req.product_name,
+                "GDS_QTY": str(req.quantity),
+                "UNIT_CD": "01",
+                "UNIT_NM": "EA",
+                "GDS_AMT": "0",
+            })
+        return items
+
     async def _register_booking(
-        self, token: str, invoice_no: str, request: ShippingRequest
+        self, token: str, invoice_no: str, request: ShippingRequest,
+        *, mpck_key: str = "", array_items: Optional[list] = None
     ) -> None:
-        """접수 등록 (RegBook)"""
+        """접수 등록 (RegBook). array_items가 주어지면 합포장 처리."""
         now = datetime.now()
         today = now.strftime("%Y%m%d")
         order_id = request.order_id or f"ORD{now.strftime('%Y%m%d%H%M%S')}"
-        mpck_key = f"{today}_{self.customer_id}_{order_id}"
+        if not mpck_key:
+            mpck_key = f"{today}_{self.customer_id}_{order_id}"
+
+        if not request.receiver_phone or not request.receiver_phone.strip():
+            raise RuntimeError("수화인 전화번호(receiver_phone)는 필수값입니다")
 
         s1, s2, s3 = self._split_phone(request.sender_phone)
         r1, r2, r3 = self._split_phone(request.receiver_phone)
+
+        if not r1 or not r2 or not r3:
+            raise RuntimeError(
+                f"수화인 전화번호 형식이 올바르지 않습니다: '{request.receiver_phone}' "
+                f"(예: 010-1234-5678)"
+            )
+
         s_addr, s_detail = self._split_address(request.sender_address)
         r_addr, r_detail = self._split_address(request.receiver_address)
+
+        if array_items is None:
+            array_items = self._build_array_items([request])
 
         payload = {
             "DATA": {
@@ -323,7 +353,7 @@ class CJClient:
                 "SHIP_EXPCT_YMD": "",
                 "SHIP_EXPCT_HOUR": "",
                 "PRT_ST": "02",
-                "ARTICLE_AMT": "1",
+                "ARTICLE_AMT": str(len(array_items)),
                 "REMARK_1": request.memo or "",
                 "REMARK_2": "",
                 "REMARK_3": "",
@@ -335,21 +365,12 @@ class CJClient:
                 "ETC_5": "",
                 "DLV_DV": "01",
                 "RCPT_SERIAL": "",
-                "ARRAY": [
-                    {
-                        "MPCK_SEQ": "1",
-                        "GDS_CD": "01",
-                        "GDS_NM": request.product_name,
-                        "GDS_QTY": str(request.quantity),
-                        "UNIT_CD": "01",
-                        "UNIT_NM": "EA",
-                        "GDS_AMT": "0",
-                    }
-                ],
+                "ARRAY": array_items,
             }
         }
 
-        logger.info("cj.registering_booking", invoice_no=invoice_no, order_id=order_id)
+        item_count = len(array_items)
+        logger.info("cj.registering_booking", invoice_no=invoice_no, order_id=order_id, item_count=item_count)
         resp = await self.http_client.post(
             f"{self.base_url}/RegBook",
             json=payload,
@@ -365,7 +386,7 @@ class CJClient:
         if body.get("RESULT_CD") != "S":
             raise RuntimeError(f"접수 등록 실패: {body.get('RESULT_DETAIL', body.get('RESULT_MSG', body))}")
 
-        logger.info("cj.booking_registered", invoice_no=invoice_no)
+        logger.info("cj.booking_registered", invoice_no=invoice_no, item_count=item_count)
 
     async def request_invoice(self, request: ShippingRequest) -> ShippingResponse:
         """송장 발급 (주소검증 → 토큰 → 운송장번호 → 접수 등록)"""
@@ -409,6 +430,67 @@ class CJClient:
                 success=False,
                 error=f"CJ 송장 발급 중 오류 발생: {str(e)}",
             )
+
+    async def request_consolidated_invoice(
+        self, requests: List[ShippingRequest]
+    ) -> ShippingResponse:
+        """합포장 송장 발급 - 같은 수령인의 여러 주문을 하나의 운송장으로 처리
+
+        여러 ShippingRequest를 받아 하나의 운송장으로 묶어서 RegBook에 등록합니다.
+        ARRAY에 각 주문의 상품을 MPCK_SEQ 순번으로 추가합니다.
+        """
+        if not requests:
+            return ShippingResponse(success=False, error="합포장할 주문이 없습니다")
+
+        if len(requests) == 1:
+            return await self.request_invoice(requests[0])
+
+        # 테스트 모드
+        if not self.customer_id or not self.biz_reg_num:
+            return self._test_invoice(requests[0])
+
+        first = requests[0]
+        try:
+            validation = await self.validate_delivery_address(first.receiver_address)
+            if validation.get("success") and not validation.get("deliverable"):
+                return ShippingResponse(
+                    success=False,
+                    error=f"배송 불가능 주소: {validation.get('error', '확인 필요')}",
+                )
+
+            token = await self._get_token()
+            invoice_no = await self._request_invoice_number(token)
+
+            # 합포장 키: 날짜_고객ID_첫번째주문ID
+            now = datetime.now()
+            today = now.strftime("%Y%m%d")
+            first_order_id = first.order_id or f"ORD{now.strftime('%Y%m%d%H%M%S')}"
+            mpck_key = f"{today}_{self.customer_id}_{first_order_id}"
+
+            # ARRAY에 모든 주문의 상품 추가
+            array_items = self._build_array_items(requests)
+
+            await self._register_booking(
+                token, invoice_no, first,
+                mpck_key=mpck_key, array_items=array_items
+            )
+
+            order_ids = [r.order_id or "unknown" for r in requests]
+            logger.info("cj.consolidated_booking", invoice_no=invoice_no, order_count=len(requests), order_ids=order_ids)
+
+            response = ShippingResponse(success=True, tracking_number=invoice_no)
+            if validation.get("warning"):
+                response.error = validation["warning"]
+            return response
+        except (httpx.ConnectError, httpx.TimeoutException):
+            return ShippingResponse(success=False, error="CJ DX API 서버에 연결할 수 없습니다.")
+        except httpx.HTTPStatusError as e:
+            return ShippingResponse(success=False, error=f"CJ API 서버 오류 (HTTP {e.response.status_code})")
+        except RuntimeError as e:
+            return ShippingResponse(success=False, error=str(e))
+        except Exception as e:
+            logger.exception("cj.consolidated_unexpected_error")
+            return ShippingResponse(success=False, error=f"합포장 송장 발급 중 오류: {str(e)}")
 
     def _test_invoice(self, request: ShippingRequest) -> ShippingResponse:
         """테스트 송장 발급"""
