@@ -757,87 +757,90 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
             const rc = e(r.routing_code||'');
             const bn = e(r.branch_name||'');
             const nm = e(r.receiver_name||'');
-            const masked = nm.length >= 2 ? nm[0] + '*'.repeat(nm.length - 2) + nm[nm.length-1] : nm;
+            const masked = nm.length>=2 ? nm[0]+'*'.repeat(nm.length-2)+nm[nm.length-1] : nm;
             const addr = e(r.receiver_address||'');
-            // 상세주소 추출: 괄호/대괄호 제거 후 동/호/아파트 부분
             const cleaned = addr.replace(/\\s*\\[.*?\\]/g,'').replace(/\\s*\\(.*?\\)/g,'');
             const pp = cleaned.split(/\\s+/);
-            let di = pp.length;
+            let di=pp.length;
             for(let i=pp.length-1;i>=0;i--){{if(/\\d+[동호층]|아파트|빌라|오피스텔|타워|빌딩/.test(pp[i])){{di=i;}}else if(di<pp.length)break;}}
             const detail = di<pp.length ? pp.slice(di).join(' ') : nm;
             labels += `
             <div class="L">
-                <div class="H">
-                    <div class="HL"><span class="HL1">운송장번호</span><svg class="B1" data-value="${{e(r.tracking_number)}}"></svg><b class="HL2">${{e(r.tracking_number)}}</b></div>
-                    <div class="HR"><span>${{dateStr}}</span><span class="HQ">1/1</span><span class="HC">택배요금:<b>선불</b></span><span class="HCS">고객센터 1588-1255</span></div>
-                </div>
-                <div class="RC"><svg class="B2" data-value="${{e(r.tracking_number)}}"></svg><div class="RCC">${{rc}}</div></div>
-                <div class="RV">
-                    <div class="VT VTR">받<br>는<br>분</div>
-                    <div class="RVM">
-                        <div class="RV1"><b>${{masked}}</b> ${{e(r.receiver_phone)}}</div>
-                        <div class="RV2">${{addr}}</div>
-                        <div class="RV3">${{detail}}</div>
-                    </div>
-                </div>
-                <div class="SD">
-                    <div class="VT VTS">보<br>내<br>는<br>분</div>
-                    <div class="SDM">${{e(r.sender_name)}} &nbsp;${{e(r.sender_phone)}}<div class="SDA">${{e(r.sender_address)}}</div></div>
-                    <div class="SDB"><div class="SBI"><div class="SBH">수량</div><div class="SBV">극소C 1</div></div><div class="SBI"><div class="SBH">운임</div><div class="SBV">0</div></div><div class="SBI"><div class="SBH">정산</div><div class="SBV">선불</div></div></div>
-                </div>
-                <div class="PD"><span>${{e(r.product_name)}}</span><span class="PDQ">총수량:1</span></div>
-                <div class="NT">고객님(받는 분)의 소중한 상품을 안전하게 배송하겠습니다. 개인정보 유출우려가 있으니 운송장은 폐기바랍니다.</div>
-                <div class="FT"><div class="FTB">${{bn ? '대한통운 - '+bn : '대한통운'}}</div><svg class="B3" data-value="${{e(r.tracking_number)}}"></svg><span class="FTN">${{e(r.tracking_number)}}</span></div>
+                <!-- 1행: 바코드 + 운송장번호 + 날짜 (용지에 "운송장번호" 라벨, 1588-1255 이미 있음) -->
+                <svg class="B1" data-value="${{e(r.tracking_number)}}"></svg>
+                <span class="TN">${{e(r.tracking_number)}}</span>
+                <span class="DT">${{dateStr}}</span>
+                <span class="QT">1/1</span>
+                <!-- 2행: 분류코드 + 바코드 -->
+                <svg class="B2" data-value="${{e(r.tracking_number)}}"></svg>
+                <span class="RC">${{rc}}</span>
+                <!-- 3행: 받는분 정보 (용지에 "받는분" 태그 이미 있음) -->
+                <span class="RN">${{masked}} &nbsp; ${{e(r.receiver_phone)}}</span>
+                <span class="RA">${{addr}}</span>
+                <span class="RD">${{detail}}</span>
+                <!-- 4행: 보내는분 (용지에 "보내는분" 태그 이미 있음) -->
+                <span class="SN">${{e(r.sender_name)}} &nbsp; ${{e(r.sender_phone)}}</span>
+                <span class="SA">${{e(r.sender_address)}}</span>
+                <!-- 수량/운임/정산 값만 (헤더는 용지에 있음) -->
+                <span class="V1">극소C 1</span>
+                <span class="V2">0</span>
+                <span class="V3">선불</span>
+                <!-- 5행: 상품 -->
+                <span class="PD">${{e(r.product_name)}}</span>
+                <span class="PQ">1</span>
+                <!-- 7행: 영업소 + 바코드 -->
+                <span class="BN">${{bn ? '대한통운 - '+bn : '대한통운'}}</span>
+                <svg class="B3" data-value="${{e(r.tracking_number)}}"></svg>
+                <span class="BT">${{e(r.tracking_number)}}</span>
             </div>`;
         }});
         w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>송장 출력</title>
         <style>
             @page{{size:100mm 82mm;margin:0}}
             *{{margin:0;padding:0;box-sizing:border-box}}
-            body{{font-family:'Malgun Gothic','맑은 고딕',sans-serif;margin:0;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-            .L{{width:100mm;height:82mm;padding:1mm 1.5mm;page-break-after:always;border:1px solid #aaa;display:flex;flex-direction:column;overflow:hidden}}
-            .H{{display:flex;align-items:center;justify-content:space-between;border-bottom:1.5pt solid #000;padding:0.5mm 0;height:7mm}}
-            .HL{{display:flex;align-items:center;gap:0.8mm}}
-            .HL1{{font-size:5pt;color:#e67300;font-weight:bold;border:0.5pt solid #e67300;padding:0 0.8mm}}
-            .HL2{{font-size:7pt;font-family:'Courier New',monospace}}
-            .B1{{height:5.5mm}}
-            .HR{{display:flex;align-items:center;gap:1mm;font-size:5pt;white-space:nowrap}}
-            .HQ{{border:0.5pt solid #000;padding:0 1mm;font-weight:bold}}
-            .HC{{background:#e67300;color:#fff;padding:0 1mm;font-size:5pt}}
-            .HCS{{color:#e67300;font-weight:bold;font-size:5pt}}
-            .RC{{display:flex;align-items:center;justify-content:center;gap:2mm;border-bottom:1.5pt solid #000;height:14mm}}
-            .B2{{height:10mm}}
-            .RCC{{font-size:22pt;font-weight:900;letter-spacing:1px}}
-            .RV{{display:flex;flex:1;border-bottom:1.5pt solid #000;padding:0.3mm 0;min-height:0}}
-            .VT{{writing-mode:vertical-lr;text-orientation:upright;font-size:4.5pt;font-weight:bold;color:#fff;padding:0.5mm 0.3mm;text-align:center;letter-spacing:0.3mm;line-height:1;flex-shrink:0}}
-            .VTR{{background:#c00}}
-            .VTS{{background:#0056b3}}
-            .RVM{{flex:1;padding-left:0.8mm;overflow:hidden}}
-            .RV1{{font-size:6.5pt;margin-bottom:0.2mm}}
-            .RV2{{font-size:6pt;color:#333;line-height:1.15;overflow:hidden;max-height:3.5mm}}
-            .RV3{{font-size:12pt;font-weight:900;line-height:1.1;margin-top:0.3mm}}
-            .SD{{display:flex;align-items:stretch;border-bottom:0.5pt solid #999;padding:0.3mm 0;font-size:5.5pt;line-height:1.15;height:8mm}}
-            .SDM{{flex:1;padding-left:0.8mm;overflow:hidden}}
-            .SDA{{color:#555}}
-            .SDB{{display:flex;flex-shrink:0;margin-left:0.5mm}}
-            .SBI{{border:0.5pt solid #ccc;text-align:center;min-width:8mm}}
-            .SBH{{background:#f5f5f5;font-size:4.5pt;font-weight:bold;color:#e67300;padding:0 0.5mm;border-bottom:0.5pt solid #ccc}}
-            .SBV{{font-size:5pt;padding:0 0.5mm}}
-            .PD{{display:flex;justify-content:space-between;align-items:center;padding:0.2mm 0;font-size:5.5pt;border-bottom:0.5pt solid #ccc}}
-            .PDQ{{font-size:5pt;color:#555}}
-            .NT{{font-size:4pt;color:#888;padding:0.2mm 0;line-height:1.1}}
-            .FT{{display:flex;align-items:center;gap:1mm;margin-top:auto;border-top:1.5pt solid #000;padding-top:0.3mm;height:6mm}}
-            .FTB{{background:#e67300;color:#fff;padding:0.5mm 1.5mm;font-size:6pt;font-weight:bold;white-space:nowrap;flex-shrink:0}}
-            .B3{{height:4.5mm;flex:1}}
-            .FTN{{font-size:5pt;font-family:'Courier New',monospace;flex-shrink:0}}
+            body{{font-family:'Malgun Gothic','맑은 고딕',sans-serif;margin:0;padding:0}}
+            .L{{
+                width:100mm;height:82mm;
+                page-break-after:always;
+                position:relative;
+                overflow:hidden;
+            }}
+            /* 1행: 바코드+운송장번호+날짜 (y:0~7mm) */
+            .B1{{position:absolute;left:12mm;top:1mm;height:5mm}}
+            .TN{{position:absolute;left:42mm;top:1.5mm;font-size:8pt;font-weight:bold;font-family:'Courier New',monospace}}
+            .DT{{position:absolute;left:68mm;top:2mm;font-size:6pt}}
+            .QT{{position:absolute;left:78mm;top:1.5mm;font-size:6pt;font-weight:bold}}
+            /* 2행: 분류코드 (y:7~21mm) */
+            .B2{{position:absolute;left:3mm;top:8mm;height:11mm}}
+            .RC{{position:absolute;left:30mm;top:8mm;font-size:24pt;font-weight:900;letter-spacing:1px}}
+            /* 3행: 받는분 (y:21~55mm) - 태그는 용지에 있으므로 왼쪽 여백 확보 */
+            .RN{{position:absolute;left:7mm;top:22mm;font-size:7.5pt;font-weight:bold}}
+            .RA{{position:absolute;left:7mm;top:26mm;font-size:6.5pt;color:#333;width:75mm;line-height:1.2}}
+            .RD{{position:absolute;left:7mm;top:33mm;font-size:14pt;font-weight:900;width:75mm;line-height:1.15}}
+            /* 4행: 보내는분 (y:55~67mm) */
+            .SN{{position:absolute;left:7mm;top:53mm;font-size:6pt}}
+            .SA{{position:absolute;left:7mm;top:56.5mm;font-size:5.5pt;color:#555;width:55mm}}
+            /* 수량/운임/정산 값 (용지에 헤더 있음, 값만 채움) */
+            .V1{{position:absolute;left:67mm;top:54mm;font-size:5.5pt;text-align:center}}
+            .V2{{position:absolute;left:78mm;top:54mm;font-size:5.5pt;text-align:center}}
+            .V3{{position:absolute;left:88mm;top:54mm;font-size:5.5pt;text-align:center}}
+            /* 5행: 상품 (y:67~72mm) */
+            .PD{{position:absolute;left:3mm;top:61mm;font-size:5.5pt;width:85mm}}
+            .PQ{{position:absolute;left:92mm;top:61mm;font-size:5.5pt}}
+            /* 6행: 주의사항 - 용지에 이미 있으므로 출력 안함 */
+            /* 7행: 하단 영업소+바코드 (y:76~82mm) */
+            .BN{{position:absolute;left:3mm;top:74mm;font-size:6.5pt;font-weight:bold}}
+            .B3{{position:absolute;left:40mm;top:74.5mm;height:5mm}}
+            .BT{{position:absolute;left:82mm;top:75mm;font-size:5pt;font-family:'Courier New',monospace}}
+            @media screen{{.L{{border:1px solid #ccc}}}}
             @media print{{.L{{border:none}}}}
         </style>
         <script src="/static/jsbarcode.min.js"><\\/script>
         </head><body>${{labels}}
         <script>
-            document.querySelectorAll('.B1').forEach(s=>{{JsBarcode(s,s.dataset.value,{{format:'CODE128',width:0.8,height:16,displayValue:false,margin:0}})}});
-            document.querySelectorAll('.B2').forEach(s=>{{JsBarcode(s,s.dataset.value,{{format:'CODE128',width:0.9,height:28,displayValue:false,margin:0}})}});
-            document.querySelectorAll('.B3').forEach(s=>{{JsBarcode(s,s.dataset.value,{{format:'CODE128',width:1,height:14,displayValue:false,margin:0}})}});
+            document.querySelectorAll('.B1').forEach(s=>{{JsBarcode(s,s.dataset.value,{{format:'CODE128',width:1,height:16,displayValue:false,margin:0}})}});
+            document.querySelectorAll('.B2').forEach(s=>{{JsBarcode(s,s.dataset.value,{{format:'CODE128',width:1,height:30,displayValue:false,margin:0}})}});
+            document.querySelectorAll('.B3').forEach(s=>{{JsBarcode(s,s.dataset.value,{{format:'CODE128',width:1,height:16,displayValue:false,margin:0}})}});
             setTimeout(()=>window.print(),500);
         <\\/script></body></html>`);
         w.document.close();
