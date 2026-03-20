@@ -828,11 +828,11 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
         }});
         w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>송장 출력</title>
         <style>
-            @page {{ size: 121.5mm 100mm; margin: 0; }}
+            @page {{ size: 100mm 100mm; margin: 0; }}
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
             .label {{
-                width: 121.5mm; height: 100mm; padding: 1.5mm 2mm;
+                width: 100mm; height: 100mm; padding: 1.5mm 2mm;
                 page-break-after: always; border: 1px solid #aaa;
                 display: flex; flex-direction: column; overflow: hidden;
             }}
@@ -855,7 +855,7 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
                 min-height: 13mm;
             }}
             .bc-route {{ height: 10mm; }}
-            .r2-code {{ font-size: 32pt; font-weight: 900; letter-spacing: 2px; }}
+            .r2-code {{ font-size: 26pt; font-weight: 900; letter-spacing: 2px; }}
             /* 3행: 받는분 */
             .r3 {{
                 flex: 1; display: flex;
@@ -873,7 +873,7 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
             .vtag-s {{ background: #0056b3; }}
             .r3-line1 {{ font-size: 8pt; font-weight: bold; margin-bottom: 0.3mm; }}
             .r3-addr {{ font-size: 7pt; color: #333; line-height: 1.2; }}
-            .r3-detail {{ font-size: 16pt; font-weight: 900; margin-top: 0.5mm; line-height: 1.15; }}
+            .r3-detail {{ font-size: 14pt; font-weight: 900; margin-top: 0.5mm; line-height: 1.15; }}
             /* 4행: 보내는분 */
             .r4 {{
                 display: flex; align-items: stretch;
