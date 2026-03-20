@@ -110,6 +110,16 @@ class CoupangClient:
 
             receiver = data.get("receiver", {})
             orderer = data.get("orderer", {})
+            logger.debug("쿠팡 receiver 데이터", receiver_keys=list(receiver.keys()), receiver=receiver)
+
+            # 쿠팡 API receiver 전화번호: phone, receiverPhoneNumber1, safeNumber 등 여러 필드 시도
+            receiver_phone = (
+                receiver.get("phone")
+                or receiver.get("receiverPhoneNumber1")
+                or receiver.get("safeNumber")
+                or receiver.get("tel1")
+                or ""
+            )
 
             ordered_at_str = data.get("orderedAt", "")
             try:
@@ -122,10 +132,10 @@ class CoupangClient:
                 order_id=str(data.get("shipmentBoxId", "")),
                 status=data.get("status", ""),
                 buyer_name=orderer.get("name", ""),
-                buyer_phone=orderer.get("phone"),
+                buyer_phone=orderer.get("phone") or orderer.get("ordererPhoneNumber", ""),
                 buyer_email=orderer.get("email"),
                 receiver_name=receiver.get("name", ""),
-                receiver_phone=receiver.get("phone", ""),
+                receiver_phone=receiver_phone,
                 receiver_address=f"{receiver.get('addr1', '')} {receiver.get('addr2', '')}".strip(),
                 receiver_zipcode=receiver.get("postCode"),
                 total_amount=data.get("totalPaymentPrice", 0),
