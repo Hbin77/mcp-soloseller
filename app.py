@@ -752,101 +752,149 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
         let labels = '';
         const today = new Date();
         const dateStr = today.getFullYear() + '.' + String(today.getMonth()+1).padStart(2,'0') + '.' + String(today.getDate()).padStart(2,'0');
-        printable.forEach(r => {{
-            const phone = e(r.receiver_phone||'');
-            const maskedPhone = phone.length > 7 ? phone.substring(0, phone.length-4).replace(/\\d(?=\\d{{0,3}}$)/g, '*') + phone.substring(phone.length-4) : phone;
+        printable.forEach((r, idx) => {{
             labels += `
             <div class="label">
-                <div class="header">
-                    <div class="header-left">
-                        <span class="header-label">운송장번호</span>
-                        <span class="header-tracking">${{e(r.tracking_number)}}</span>
+                <!-- Row 1: 운송장번호 바코드 + 날짜 + 수량 + 요금 + 고객센터 -->
+                <div class="row1">
+                    <div class="row1-left">
+                        <span class="tracking-label">운송장번호</span>
+                        <svg class="barcode-top" data-value="${{e(r.tracking_number)}}"></svg>
+                        <span class="tracking-num">${{e(r.tracking_number)}}</span>
                     </div>
-                    <div class="header-right">
+                    <div class="row1-right">
                         <span>${{dateStr}}</span>
-                        <span class="qty-box">1/1</span>
-                        <span class="fee-box">선불</span>
+                        <span class="box-outlined">1/1</span>
+                        <span class="box-blue">선불</span>
+                        <span class="cs-num">고객센터 1588-1255</span>
                     </div>
                 </div>
-                <div class="barcode-top"><svg class="barcode-svg" data-value="${{e(r.tracking_number)}}"></svg></div>
-                <div class="receiver-section">
-                    <div class="receiver-phone">
-                        <span class="label-tag tag-recv">받는분</span>
-                        ${{e(r.receiver_phone)}}
+                <!-- Row 2: 받는분 정보 (메인 영역) -->
+                <div class="row2">
+                    <div class="recv-info">
+                        <div class="recv-line1">
+                            <span class="tag tag-red">받는분</span>
+                            <span class="recv-phone">${{e(r.receiver_phone)}}</span>
+                        </div>
+                        <div class="recv-addr">${{e(r.receiver_address)}}</div>
+                        <div class="recv-name">${{e(r.receiver_name)}}</div>
                     </div>
-                    <div class="receiver-addr">${{e(r.receiver_address)}}</div>
-                    <div class="receiver-name">${{e(r.receiver_name)}}</div>
-                </div>
-                <div class="sender-section">
-                    <span class="label-tag tag-send">보내는분</span>
-                    ${{e(r.sender_name)}} ${{e(r.sender_phone)}}
-                    <div class="sender-addr">${{e(r.sender_address)}}</div>
-                </div>
-                <div class="product-section">
-                    <table class="product-table">
-                        <tr><th>상품명</th><th>수량</th></tr>
-                        <tr><td>${{e(r.product_name)}}</td><td>1</td></tr>
-                    </table>
-                    <div class="order-num">주문번호: ${{e(r.order_id)}}</div>
-                </div>
-                <div class="notice">
-                    <p>※ 배송지시일로부터 , 배송예정일(D+2), 배송예시시일(D+5),</p>
-                    <p>배송마지시일(D+9)에 미배송 시 자동 반품처리됩니다.</p>
-                </div>
-                <div class="footer">
-                    <div class="footer-bar">
-                        <span class="footer-carrier">대한통운</span>
+                    <div class="recv-side">
+                        <table class="info-table">
+                            <tr><td class="info-label">수량</td><td>1</td></tr>
+                            <tr><td class="info-label">운임</td><td></td></tr>
+                            <tr><td class="info-label">정산</td><td></td></tr>
+                        </table>
                     </div>
-                    <div class="barcode-bottom"><svg class="barcode-svg-bottom" data-value="${{e(r.tracking_number)}}"></svg></div>
+                </div>
+                <!-- Row 3: 보내는분 + 상품 -->
+                <div class="row3">
+                    <div class="send-info">
+                        <span class="tag tag-blue">보내는분</span>
+                        <span>${{e(r.sender_name)}}</span>
+                        <span>${{e(r.sender_phone)}}</span>
+                        <div class="send-addr">${{e(r.sender_address)}}</div>
+                    </div>
+                    <div class="product-info">
+                        <div class="product-line">${{e(r.product_name)}}</div>
+                        <div class="order-line">주문번호: ${{e(r.order_id)}}</div>
+                    </div>
+                </div>
+                <!-- Row 4: 주의사항 + 하단 바코드 -->
+                <div class="row4">
+                    <div class="notice">
+                        고객님(받는 분)의 소중한 상품을 안전하게 배송하겠습니다.<br>
+                        개인정보 유출우려가 있으니 운송장은 폐기바랍니다.
+                    </div>
+                    <div class="bottom-bar">
+                        <span class="carrier-name">대한통운</span>
+                        <svg class="barcode-bottom" data-value="${{e(r.tracking_number)}}"></svg>
+                    </div>
                 </div>
             </div>`;
         }});
         w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>송장 출력</title>
         <style>
-            @page {{ size: 100mm 150mm; margin: 0; }}
+            @page {{ size: 150mm 100mm; margin: 0; }}
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; font-size: 9pt; }}
-            .label {{ width: 100mm; height: 150mm; padding: 3mm; page-break-after: always; border: 1px solid #ccc; position: relative; display: flex; flex-direction: column; }}
-            .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000; padding-bottom: 1.5mm; }}
-            .header-left {{ display: flex; align-items: center; gap: 2mm; }}
-            .header-label {{ font-size: 7pt; color: #666; }}
-            .header-tracking {{ font-size: 11pt; font-weight: bold; font-family: monospace; letter-spacing: 1px; }}
-            .header-right {{ display: flex; align-items: center; gap: 2mm; font-size: 7pt; }}
-            .qty-box {{ border: 1px solid #000; padding: 0.5mm 2mm; font-weight: bold; }}
-            .fee-box {{ background: #0066cc; color: #fff; padding: 0.5mm 3mm; font-weight: bold; border-radius: 1mm; }}
-            .barcode-top {{ text-align: center; padding: 1mm 0; border-bottom: 1px solid #ccc; }}
-            .barcode-svg {{ width: 85mm; height: 12mm; }}
-            .receiver-section {{ padding: 2mm 1mm; border-bottom: 1.5px solid #000; flex: 1; }}
-            .receiver-phone {{ font-size: 10pt; margin-bottom: 1mm; display: flex; align-items: center; gap: 2mm; }}
-            .receiver-addr {{ font-size: 9pt; color: #333; margin: 1mm 0; line-height: 1.4; }}
-            .receiver-name {{ font-size: 18pt; font-weight: bold; margin-top: 1mm; }}
-            .label-tag {{ display: inline-block; padding: 0.5mm 2mm; font-size: 7pt; font-weight: bold; border-radius: 1mm; color: #fff; vertical-align: middle; }}
-            .tag-recv {{ background: #e53e3e; }}
-            .tag-send {{ background: #3182ce; }}
-            .sender-section {{ padding: 2mm 1mm; font-size: 8pt; color: #333; border-bottom: 1px solid #ccc; line-height: 1.4; }}
-            .sender-addr {{ margin-top: 0.5mm; }}
-            .product-section {{ padding: 1.5mm 1mm; border-bottom: 1px solid #ccc; }}
-            .product-table {{ width: 100%; font-size: 8pt; border-collapse: collapse; }}
-            .product-table th {{ text-align: left; font-size: 7pt; color: #666; padding: 0.5mm 0; }}
-            .product-table td {{ padding: 0.5mm 0; }}
-            .product-table td:last-child, .product-table th:last-child {{ text-align: center; width: 15mm; }}
-            .order-num {{ font-size: 7pt; color: #888; margin-top: 1mm; }}
-            .notice {{ font-size: 6.5pt; color: #888; padding: 1mm 1mm; line-height: 1.3; }}
-            .footer {{ margin-top: auto; }}
-            .footer-bar {{ background: #0066cc; color: #fff; padding: 1.5mm 3mm; font-size: 10pt; font-weight: bold; display: flex; align-items: center; justify-content: space-between; }}
-            .footer-carrier {{ font-size: 10pt; }}
-            .barcode-bottom {{ text-align: center; padding: 1mm 0; }}
-            .barcode-svg-bottom {{ width: 85mm; height: 10mm; }}
+            body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; }}
+            .label {{
+                width: 150mm; height: 100mm;
+                padding: 2mm 3mm;
+                page-break-after: always;
+                border: 1px solid #999;
+                display: flex; flex-direction: column;
+            }}
+            /* Row 1: Header */
+            .row1 {{
+                display: flex; justify-content: space-between; align-items: center;
+                border-bottom: 2px solid #000; padding-bottom: 1.5mm; margin-bottom: 1mm;
+            }}
+            .row1-left {{ display: flex; align-items: center; gap: 2mm; }}
+            .tracking-label {{ font-size: 6pt; color: #666; }}
+            .barcode-top {{ height: 10mm; }}
+            .tracking-num {{ font-size: 9pt; font-weight: bold; font-family: monospace; letter-spacing: 1px; }}
+            .row1-right {{ display: flex; align-items: center; gap: 3mm; font-size: 7pt; }}
+            .box-outlined {{ border: 1px solid #000; padding: 0.3mm 2mm; font-weight: bold; }}
+            .box-blue {{ background: #0056b3; color: #fff; padding: 0.3mm 3mm; font-weight: bold; }}
+            .cs-num {{ font-size: 7pt; color: #0056b3; font-weight: bold; }}
+            /* Row 2: Receiver (main area) */
+            .row2 {{
+                display: flex; flex: 1;
+                border-bottom: 1.5px solid #000; padding: 1.5mm 0;
+            }}
+            .recv-info {{ flex: 1; }}
+            .recv-line1 {{ display: flex; align-items: center; gap: 2mm; margin-bottom: 1mm; }}
+            .recv-phone {{ font-size: 11pt; font-weight: bold; }}
+            .recv-addr {{ font-size: 9pt; color: #333; line-height: 1.4; margin-bottom: 1mm; }}
+            .recv-name {{ font-size: 22pt; font-weight: bold; }}
+            .recv-side {{
+                width: 18mm; border-left: 1px solid #ccc;
+                display: flex; flex-direction: column; justify-content: flex-start;
+                padding-left: 2mm; margin-left: 2mm;
+            }}
+            .info-table {{ font-size: 7pt; }}
+            .info-table td {{ padding: 1mm 1mm; }}
+            .info-label {{ color: #0056b3; font-weight: bold; }}
+            /* Tags */
+            .tag {{ display: inline-block; padding: 0.3mm 2mm; font-size: 7pt; font-weight: bold; color: #fff; }}
+            .tag-red {{ background: #cc0000; }}
+            .tag-blue {{ background: #0056b3; }}
+            /* Row 3: Sender + Product */
+            .row3 {{
+                display: flex; gap: 3mm;
+                border-bottom: 1px solid #ccc; padding: 1.5mm 0;
+                font-size: 8pt; line-height: 1.4;
+            }}
+            .send-info {{ flex: 1; }}
+            .send-addr {{ color: #555; margin-top: 0.5mm; }}
+            .product-info {{ flex: 1; border-left: 1px solid #ccc; padding-left: 3mm; }}
+            .product-line {{ font-size: 8pt; }}
+            .order-line {{ font-size: 7pt; color: #888; margin-top: 0.5mm; }}
+            /* Row 4: Footer */
+            .row4 {{
+                display: flex; align-items: center; justify-content: space-between;
+                margin-top: auto; padding-top: 1mm;
+            }}
+            .notice {{ font-size: 6pt; color: #888; line-height: 1.3; flex: 1; }}
+            .bottom-bar {{
+                display: flex; align-items: center; gap: 2mm;
+            }}
+            .carrier-name {{
+                background: #0056b3; color: #fff; padding: 1mm 3mm;
+                font-size: 9pt; font-weight: bold; white-space: nowrap;
+            }}
+            .barcode-bottom {{ height: 8mm; }}
             @media print {{ .label {{ border: none; }} }}
         </style>
         <script src="/static/jsbarcode.min.js"><\\/script>
         </head><body>${{labels}}
         <script>
-            document.querySelectorAll('.barcode-svg').forEach(svg => {{
-                JsBarcode(svg, svg.dataset.value, {{ format: 'CODE128', width: 1.8, height: 40, displayValue: false }});
+            document.querySelectorAll('.barcode-top').forEach(svg => {{
+                JsBarcode(svg, svg.dataset.value, {{ format: 'CODE128', width: 1.5, height: 30, displayValue: false }});
             }});
-            document.querySelectorAll('.barcode-svg-bottom').forEach(svg => {{
-                JsBarcode(svg, svg.dataset.value, {{ format: 'CODE128', width: 1.8, height: 30, displayValue: false }});
+            document.querySelectorAll('.barcode-bottom').forEach(svg => {{
+                JsBarcode(svg, svg.dataset.value, {{ format: 'CODE128', width: 1.5, height: 25, displayValue: false }});
             }});
             setTimeout(() => window.print(), 500);
         <\\/script></body></html>`);
