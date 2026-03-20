@@ -112,12 +112,11 @@ class CoupangClient:
             orderer = data.get("orderer", {})
             logger.debug("쿠팡 receiver 데이터", receiver_keys=list(receiver.keys()), receiver=receiver)
 
-            # 쿠팡 API receiver 전화번호: phone, receiverPhoneNumber1, safeNumber 등 여러 필드 시도
+            # 쿠팡 API receiver 전화번호: safeNumber(안심번호, 0502-xxxx-xxxx)가 기본
             receiver_phone = (
-                receiver.get("phone")
-                or receiver.get("receiverPhoneNumber1")
-                or receiver.get("safeNumber")
-                or receiver.get("tel1")
+                receiver.get("safeNumber")
+                or receiver.get("receiverNumber")
+                or receiver.get("phone")
                 or ""
             )
 

@@ -60,14 +60,17 @@ class CJClient:
 
     @staticmethod
     def _split_phone(phone: str) -> Tuple[str, str, str]:
-        """전화번호를 3분할. '010-3508-4959', '01035084959', '02-1234-5678' 등 처리"""
+        """전화번호를 3분할. '010-3508-4959', '0502-1234-5678', '02-1234-5678' 등 처리"""
         digits = re.sub(r"[^0-9]", "", phone)
         if len(digits) < 9:
             return digits, "", ""
-        # 서울 02 지역번호
+        # 서울 02 지역번호 (2-X-4)
         if digits.startswith("02"):
             return digits[:2], digits[2:-4], digits[-4:]
-        # 3-4-4 or 3-3-4 패턴
+        # 안심번호 0502/0503/0504/0505/0506 (4-4-4)
+        if digits.startswith("050"):
+            return digits[:4], digits[4:-4], digits[-4:]
+        # 일반 3-X-4 패턴 (010, 031, 070 등)
         return digits[:3], digits[3:-4], digits[-4:]
 
     @staticmethod
