@@ -654,6 +654,7 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
             <button onclick="fetchOrders()" style="background:#333;">새로고침</button>
             <button onclick="processConfirm()" style="background:#22c55e;" id="process-btn">일괄 처리</button>
+            <button onclick="testPrint()" style="background:#6366f1;">테스트 출력</button>
         </div>
     </div>
 
@@ -909,6 +910,26 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
             setTimeout(() => window.print(), 500);
         <\\/script></body></html>`);
         w.document.close();
+    }}
+
+    function testPrint() {{
+        lastResults = [{{
+            order_id: 'TEST-20260320-001',
+            tracking_number: '6970-4079-7621',
+            receiver_name: '홍길동',
+            receiver_phone: '0502-1234-5678',
+            receiver_address: '서울특별시 강남구 테헤란로 123 테스트빌딩 301호 (역삼동)',
+            receiver_zipcode: '06234',
+            sender_name: '지너스인터내셔널',
+            sender_phone: '061-725-7298',
+            sender_address: '전라남도 순천시 가곡동 741번지 지너스인터내셔널',
+            sender_zipcode: '57900',
+            product_name: '테스트 상품 75ml, 1개',
+            routing_code: '3Z70',
+            branch_name: '역삼중앙-B12-3구역',
+            status: '테스트',
+        }}];
+        printLabels();
     }}
 
     // 자동화
