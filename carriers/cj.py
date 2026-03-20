@@ -412,8 +412,11 @@ class CJClient:
             invoice_no = await self._request_invoice_number(token)
             await self._register_booking(token, invoice_no, request)
 
-            response = ShippingResponse(success=True, tracking_number=invoice_no)
-            # 배송 지연 경고가 있으면 첨부
+            response = ShippingResponse(
+                success=True, tracking_number=invoice_no,
+                routing_code=validation.get("address_code", ""),
+                branch_name=validation.get("branch_name", ""),
+            )
             if validation.get("warning"):
                 response.error = validation["warning"]
             return response
@@ -483,7 +486,11 @@ class CJClient:
             order_ids = [r.order_id or "unknown" for r in requests]
             logger.info("cj.consolidated_booking", invoice_no=invoice_no, order_count=len(requests), order_ids=order_ids)
 
-            response = ShippingResponse(success=True, tracking_number=invoice_no)
+            response = ShippingResponse(
+                success=True, tracking_number=invoice_no,
+                routing_code=validation.get("address_code", ""),
+                branch_name=validation.get("branch_name", ""),
+            )
             if validation.get("warning"):
                 response.error = validation["warning"]
             return response

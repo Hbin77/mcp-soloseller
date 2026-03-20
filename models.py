@@ -38,3 +38,6 @@ class ShippingResponse:
     tracking_number: Optional[str] = None
     error: Optional[str] = None
     is_test: bool = False
+    # CJ 주소정제 라우팅 정보 (라벨 출력용)
+    routing_code: Optional[str] = None      # 분류코드 (예: 4W44)
+    branch_name: Optional[str] = None       # 도착영업소명 (예: 용두중앙)

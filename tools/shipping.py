@@ -65,7 +65,9 @@ async def issue_invoice(
         "success": response.success,
         "tracking_number": response.tracking_number,
         "carrier": "CJ대한통운",
-        "error": response.error
+        "error": response.error,
+        "routing_code": response.routing_code or "",
+        "branch_name": response.branch_name or "",
     }
     if response.is_test:
         result["warning"] = "테스트 모드 송장입니다. 실제 배송에 사용할 수 없습니다."
@@ -207,6 +209,8 @@ async def process_orders(days: int = 7, dry_run: bool = False) -> dict[str, Any]
                 "receiver_name": receiver, "receiver_phone": phone,
                 "receiver_address": address, "receiver_zipcode": zipcode,
                 "product_name": product, **sender_data,
+                "routing_code": invoice_result.get("routing_code", ""),
+                "branch_name": invoice_result.get("branch_name", ""),
             }
 
             if is_test:
@@ -285,6 +289,8 @@ async def process_orders(days: int = 7, dry_run: bool = False) -> dict[str, Any]
                 "receiver_name": receiver, "receiver_phone": phone,
                 "receiver_address": address, "receiver_zipcode": zipcode,
                 "product_name": product_summary, **sender_data,
+                "routing_code": response.routing_code or "",
+                "branch_name": response.branch_name or "",
             }
 
             # 각 주문에 대해 쿠팡에 동일 송장 등록
