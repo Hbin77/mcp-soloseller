@@ -271,6 +271,8 @@ class CJClient:
         now = datetime.now()
         today = now.strftime("%Y%m%d")
         order_id = request.order_id or f"ORD{now.strftime('%Y%m%d%H%M%S')}"
+        # CUST_USE_NO에 타임스탬프 suffix 추가 → 재시도 시 ORA-00001 중복 방지
+        cust_use_no = f"{order_id}_{now.strftime('%H%M%S')}"
         if not mpck_key:
             mpck_key = f"{today}_{self.customer_id}_{order_id}"
 
@@ -297,7 +299,7 @@ class CJClient:
                 "CUST_ID": self.customer_id,
                 "TOKEN_NUM": token,
                 "RCPT_YMD": today,
-                "CUST_USE_NO": order_id,
+                "CUST_USE_NO": cust_use_no,
                 "RCPT_DV": "01",
                 "WORK_DV_CD": "01",
                 "REQ_DV_CD": "01",
