@@ -728,7 +728,7 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
                 h += '<tr style="border-top:1px solid #222;"><td style="padding:8px;font-size:12px;">' + esc(r.order_id) + '</td><td style="font-family:monospace;">' + esc(r.tracking_number||'-') + '</td><td>' + st + '</td></tr>';
             }});
             h += '</table><p style="color:#888;font-size:12px;margin-top:8px;">총 ' + (data.total||0) + '건 | 성공 ' + (data.processed||0) + '건 | 실패 ' + (data.failed||0) + '건</p>';
-            const printable = data.results.filter(r => r.tracking_number && (r.status === '완료' || r.status === '테스트'));
+            const printable = data.results.filter(r => r.tracking_number);
             if (printable.length > 0) {{
                 h += '<button onclick="printLabels()" style="margin-top:12px;background:#2563eb;padding:10px 24px;">송장 출력 (' + printable.length + '건)</button>';
             }}
@@ -740,7 +740,7 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
     }}
 
     function printLabels() {{
-        const printable = lastResults.filter(r => r.tracking_number && (r.status === '완료' || r.status === '테스트'));
+        const printable = lastResults.filter(r => r.tracking_number);
         if (printable.length === 0) return;
         const w = window.open('', '_blank');
         if (!w) {{ alert('팝업이 차단되었습니다. 팝업을 허용해주세요.'); return; }}
