@@ -756,44 +756,59 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
         printable.forEach((r, idx) => {{
             const rc = e(r.routing_code||'');
             const bn = e(r.branch_name||'');
-            // 이름 마스킹: 홍길동 → 홍*동, 김대호 → 김*호
             const nm = e(r.receiver_name||'');
             const masked = nm.length >= 2 ? nm[0] + '*'.repeat(nm.length - 2) + nm[nm.length-1] : nm;
-            // 상세주소 추출 (동/호 포함 마지막 부분)
             const addr = e(r.receiver_address||'');
-            const detailMatch = addr.match(/([가-힣]+\\d*[동호층].*?)$/);
-            const detailAddr = detailMatch ? detailMatch[1] : '';
+            // 상세주소: 아파트/빌라/동/호 부분만 추출 (괄호, 대괄호 제외)
+            const cleaned = addr.replace(/\\s*\\[.*?\\]/g, '').replace(/\\s*\\(.*?\\)/g, '');
+            const parts = cleaned.split(/\\s+/);
+            // 뒤에서 동/호/층 포함된 부분 찾기
+            let detIdx = parts.length;
+            for (let i = parts.length - 1; i >= 0; i--) {{
+                if (/\\d+[동호층]|아파트|빌라|오피스텔|타워|빌딩/.test(parts[i])) {{ detIdx = i; }}
+                else if (detIdx < parts.length) break;
+            }}
+            const detailAddr = detIdx < parts.length ? parts.slice(detIdx).join(' ') : nm;
             labels += `
             <div class="label">
-                <!-- 1행: 운송장번호 -->
+                <!-- 1행: 운송장번호 바코드 -->
                 <div class="r1">
-                    <span class="r1-label">운송장번호</span>
+                    <div class="r1-left">
+                        <span class="r1-label">운송장번호</span>
+                        <span class="r1-num">${{e(r.tracking_number)}}</span>
+                    </div>
                     <svg class="bc1" data-value="${{e(r.tracking_number)}}"></svg>
-                    <span class="r1-num">${{e(r.tracking_number)}}</span>
-                    <span class="r1-date">${{dateStr}}</span>
-                    <span class="r1-qty">1 / 1</span>
-                    <span class="r1-cs">고객센터 1588-1255</span>
+                    <div class="r1-right">
+                        <span>${{dateStr}}</span>
+                        <span class="r1-qty">1/1</span>
+                        <span class="r1-cs">고객센터 1588-1255</span>
+                    </div>
                 </div>
                 <!-- 2행: 분류코드 -->
-                <div class="r2">${{rc || ''}}</div>
+                <div class="r2">
+                    <svg class="bc-route" data-value="${{e(r.tracking_number)}}"></svg>
+                    <span class="r2-code">${{rc || ''}}</span>
+                </div>
                 <!-- 3행: 받는분 -->
                 <div class="r3">
-                    <div class="r3-main">
-                        <div class="r3-line1"><span class="tag-r">받는분</span> <b>${{masked}}</b> &nbsp; ${{e(r.receiver_phone)}}</div>
+                    <div class="r3-tag"><span class="vtag vtag-r">받<br>는<br>분</span></div>
+                    <div class="r3-content">
+                        <div class="r3-line1">${{masked}} ${{e(r.receiver_phone)}}</div>
                         <div class="r3-addr">${{addr}}</div>
-                        <div class="r3-detail">${{detailAddr || masked}}</div>
+                        <div class="r3-detail">${{detailAddr}}</div>
                     </div>
                 </div>
                 <!-- 4행: 보내는분 + 수량/운임/정산 -->
                 <div class="r4">
-                    <div class="r4-left">
-                        <span class="tag-s">보내는분</span> ${{e(r.sender_name)}} ${{e(r.sender_phone)}}
+                    <div class="r4-tag"><span class="vtag vtag-s">보<br>내<br>는<br>분</span></div>
+                    <div class="r4-content">
+                        <span>${{e(r.sender_name)}} &nbsp; ${{e(r.sender_phone)}}</span>
                         <div class="r4-addr">${{e(r.sender_address)}}</div>
                     </div>
-                    <div class="r4-right">
-                        <span><b class="bl">수량</b> 극소C 1</span>
-                        <span><b class="bl">운임</b> 0</span>
-                        <span><b class="bl">정산</b> 선불</span>
+                    <div class="r4-boxes">
+                        <div class="info-box"><div class="info-head">수량</div><div class="info-val">극소C 1</div></div>
+                        <div class="info-box"><div class="info-head">운임</div><div class="info-val">0</div></div>
+                        <div class="info-box"><div class="info-head">정산</div><div class="info-val">선불</div></div>
                     </div>
                 </div>
                 <!-- 5행: 상품 -->
@@ -805,8 +820,8 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
                 <div class="r6">고객님(받는 분)의 소중한 상품을 안전하게 배송하겠습니다. 개인정보 유출우려가 있으니 운송장은 폐기바랍니다.</div>
                 <!-- 7행: 하단 -->
                 <div class="r7">
-                    <div class="r7-branch">${{bn || '대한통운'}}</div>
-                    <svg class="bc2" data-value="${{e(r.tracking_number)}}"></svg>
+                    <div class="r7-branch">${{bn ? '대한통운 - ' + bn : '대한통운'}}</div>
+                    <div class="r7-bc"><svg class="bc2" data-value="${{e(r.tracking_number)}}"></svg></div>
                     <span class="r7-num">${{e(r.tracking_number)}}</span>
                 </div>
             </div>`;
@@ -817,72 +832,88 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
             .label {{
-                width: 121.5mm; height: 100mm; padding: 1.5mm 2.5mm;
+                width: 121.5mm; height: 100mm; padding: 1.5mm 2mm;
                 page-break-after: always; border: 1px solid #aaa;
                 display: flex; flex-direction: column; overflow: hidden;
-                font-size: 7.5pt;
             }}
-            /* 1행: 운송장번호 - 한 줄 */
+            /* 1행: 운송장번호 */
             .r1 {{
-                display: flex; align-items: center; gap: 1.5mm;
-                border-bottom: 2px solid #000; padding: 0.5mm 0 1mm 0;
-                white-space: nowrap; overflow: hidden;
+                display: flex; align-items: center; justify-content: space-between;
+                border-bottom: 2px solid #000; padding: 0.8mm 0;
             }}
-            .r1-label {{ font-size: 5.5pt; color: #555; flex-shrink: 0; }}
-            .bc1 {{ height: 7mm; flex-shrink: 0; }}
-            .r1-num {{ font-size: 7.5pt; font-weight: bold; font-family: 'Courier New', monospace; flex-shrink: 0; }}
-            .r1-date {{ font-size: 6.5pt; flex-shrink: 0; }}
-            .r1-qty {{ border: 1px solid #000; padding: 0 1.5mm; font-size: 6.5pt; font-weight: bold; flex-shrink: 0; }}
-            .r1-cs {{ font-size: 6.5pt; color: #0056b3; font-weight: bold; margin-left: auto; flex-shrink: 0; }}
+            .r1-left {{ display: flex; align-items: baseline; gap: 1mm; }}
+            .r1-label {{ font-size: 6pt; color: #e67300; font-weight: bold; border: 1px solid #e67300; padding: 0 1mm; }}
+            .r1-num {{ font-size: 9pt; font-weight: bold; font-family: 'Courier New', monospace; }}
+            .bc1 {{ height: 9mm; }}
+            .r1-right {{ display: flex; align-items: center; gap: 1.5mm; font-size: 6.5pt; }}
+            .r1-qty {{ border: 1px solid #000; padding: 0 1.5mm; font-weight: bold; }}
+            .r1-cs {{ color: #e67300; font-weight: bold; }}
             /* 2행: 분류코드 */
             .r2 {{
-                text-align: center; padding: 0.5mm 0;
-                border-bottom: 2px solid #000;
-                font-size: 30pt; font-weight: 900; letter-spacing: 3px;
-                line-height: 1.1;
-                min-height: 12mm;
+                display: flex; align-items: center; justify-content: center; gap: 3mm;
+                border-bottom: 2px solid #000; padding: 1mm 0;
+                min-height: 13mm;
             }}
-            /* 3행: 받는분 (메인) */
-            .r3 {{ flex: 1; padding: 0.5mm 0; border-bottom: 1.5px solid #000; display: flex; }}
-            .r3-main {{ flex: 1; }}
-            .r3-line1 {{ font-size: 8pt; margin-bottom: 0.3mm; }}
-            .tag-r {{ background: #cc0000; color: #fff; font-size: 6pt; font-weight: bold; padding: 0.2mm 1.5mm; }}
-            .tag-s {{ background: #0056b3; color: #fff; font-size: 6pt; font-weight: bold; padding: 0.2mm 1.5mm; }}
-            .r3-addr {{ font-size: 7.5pt; color: #333; line-height: 1.25; }}
-            .r3-detail {{ font-size: 18pt; font-weight: 900; margin-top: 0.5mm; line-height: 1.1; }}
+            .bc-route {{ height: 10mm; }}
+            .r2-code {{ font-size: 32pt; font-weight: 900; letter-spacing: 2px; }}
+            /* 3행: 받는분 */
+            .r3 {{
+                flex: 1; display: flex;
+                border-bottom: 2px solid #000; padding: 0.5mm 0;
+            }}
+            .r3-tag {{ display: flex; align-items: flex-start; padding-right: 1mm; }}
+            .r3-content {{ flex: 1; }}
+            .vtag {{
+                writing-mode: vertical-lr; text-orientation: upright;
+                font-size: 5.5pt; font-weight: bold; color: #fff;
+                padding: 1mm 0.5mm; text-align: center; letter-spacing: 0.5mm;
+                line-height: 1;
+            }}
+            .vtag-r {{ background: #cc0000; }}
+            .vtag-s {{ background: #0056b3; }}
+            .r3-line1 {{ font-size: 8pt; font-weight: bold; margin-bottom: 0.3mm; }}
+            .r3-addr {{ font-size: 7pt; color: #333; line-height: 1.2; }}
+            .r3-detail {{ font-size: 16pt; font-weight: 900; margin-top: 0.5mm; line-height: 1.15; }}
             /* 4행: 보내는분 */
             .r4 {{
-                display: flex; align-items: flex-start; justify-content: space-between;
+                display: flex; align-items: stretch;
                 padding: 0.5mm 0; border-bottom: 1px solid #999;
-                font-size: 7pt; line-height: 1.25;
+                font-size: 6.5pt; line-height: 1.2;
             }}
-            .r4-left {{ flex: 1; }}
+            .r4-tag {{ display: flex; align-items: flex-start; padding-right: 1mm; }}
+            .r4-content {{ flex: 1; }}
             .r4-addr {{ color: #555; }}
-            .r4-right {{ display: flex; gap: 2.5mm; font-size: 6.5pt; white-space: nowrap; flex-shrink: 0; }}
-            .bl {{ color: #0056b3; }}
+            .r4-boxes {{ display: flex; gap: 0; flex-shrink: 0; margin-left: 1mm; }}
+            .info-box {{ border: 1px solid #ccc; text-align: center; min-width: 10mm; }}
+            .info-head {{ background: #f0f0f0; font-size: 5.5pt; font-weight: bold; color: #e67300; padding: 0.2mm 1mm; border-bottom: 1px solid #ccc; }}
+            .info-val {{ font-size: 6pt; padding: 0.2mm 1mm; }}
             /* 5행: 상품 */
             .r5 {{
                 display: flex; justify-content: space-between; align-items: center;
-                padding: 0.3mm 0; font-size: 7pt; border-bottom: 1px solid #ccc;
+                padding: 0.3mm 0; font-size: 6.5pt; border-bottom: 1px solid #ccc;
             }}
-            .r5-qty {{ font-size: 6.5pt; color: #555; }}
+            .r5-qty {{ font-size: 6pt; color: #555; }}
             /* 6행: 주의사항 */
-            .r6 {{ font-size: 5.5pt; color: #888; padding: 0.3mm 0; line-height: 1.2; }}
+            .r6 {{ font-size: 5pt; color: #888; padding: 0.3mm 0; line-height: 1.15; }}
             /* 7행: 하단 */
             .r7 {{
-                display: flex; align-items: center; gap: 1.5mm;
+                display: flex; align-items: center; gap: 1mm;
                 margin-top: auto; padding-top: 0.5mm; border-top: 2px solid #000;
             }}
-            .r7-branch {{ background: #000; color: #fff; padding: 0.8mm 2.5mm; font-size: 8pt; font-weight: bold; white-space: nowrap; flex-shrink: 0; }}
-            .bc2 {{ height: 6mm; flex: 1; }}
-            .r7-num {{ font-size: 6.5pt; font-family: 'Courier New', monospace; flex-shrink: 0; }}
+            .r7-branch {{ background: #e67300; color: #fff; padding: 0.8mm 2mm; font-size: 7pt; font-weight: bold; white-space: nowrap; flex-shrink: 0; }}
+            .r7-bc {{ flex: 1; text-align: center; }}
+            .bc2 {{ height: 6mm; }}
+            .r7-num {{ font-size: 6pt; font-family: 'Courier New', monospace; flex-shrink: 0; }}
             @media print {{ .label {{ border: none; }} }}
         </style>
         <script src="/static/jsbarcode.min.js"><\\/script>
         </head><body>${{labels}}
         <script>
             document.querySelectorAll('.bc1').forEach(svg => {{
-                JsBarcode(svg, svg.dataset.value, {{ format: 'CODE128', width: 1, height: 22, displayValue: false, margin: 0 }});
+                JsBarcode(svg, svg.dataset.value, {{ format: 'CODE128', width: 1.3, height: 28, displayValue: false, margin: 0 }});
+            }});
+            document.querySelectorAll('.bc-route').forEach(svg => {{
+                JsBarcode(svg, svg.dataset.value, {{ format: 'CODE128', width: 1, height: 30, displayValue: false, margin: 0 }});
             }});
             document.querySelectorAll('.bc2').forEach(svg => {{
                 JsBarcode(svg, svg.dataset.value, {{ format: 'CODE128', width: 1.2, height: 18, displayValue: false, margin: 0 }});
