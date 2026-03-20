@@ -818,11 +818,11 @@ async def dashboard_page(session: Optional[str] = Cookie(None)):
         }});
         w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>송장 출력</title>
         <style>
-            @page {{ size: 150mm 100mm; margin: 0; }}
+            @page {{ size: 121.5mm 100mm; margin: 0; }}
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; }}
+            body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; margin: 0; padding: 0; }}
             .label {{
-                width: 150mm; height: 100mm;
+                width: 121.5mm; height: 100mm;
                 padding: 2mm 3mm;
                 page-break-after: always;
                 border: 1px solid #aaa;
